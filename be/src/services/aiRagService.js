@@ -362,14 +362,7 @@ class AiRagService {
     }
 
     if (!hasLlmKey) {
-      const notConfiguredMsg = `### ⚠️ AI Is Not Configured\n\n` +
-        `No AI Model or API key has been configured in **[AI Settings → Model & Gateway](/settings/ai)**.\n\n` +
-        `The AI Copilot strictly requires an active AI Model (such as Google Gemini, DeepSeek, OpenAI, or Groq) with a valid API key to process questions and analyze your CRM leads.\n\n` +
-        `**To configure your AI:**\n` +
-        `1. Open **[AI Settings](/settings/ai)** from the sidebar navigation.\n` +
-        `2. In the **Model & Gateway** tab, choose your provider (e.g. **Google Gemini**, **DeepSeek**, or **OpenAI**).\n` +
-        `3. Enter your valid **API Key** and click **Save Configuration**.\n\n` +
-        `Once configured, every question and lead analysis will be sent directly to your chosen AI model with live CRM data context.`;
+      const notConfiguredMsg = 'AI not configured.';
 
       await this.saveCopilotMessage(userId, activeConvId, 'user', queryType || 'custom', prompt);
       await this.saveCopilotMessage(userId, activeConvId, 'assistant', queryType || 'custom', notConfiguredMsg, [], []);
@@ -445,10 +438,10 @@ ${crmContextText}`;
     try {
       aiAnswer = await this.callConfiguredLLM(gateway, systemPrompt, userPromptToSend);
     } catch (llmErr) {
-      aiAnswer = `### ⚠️ AI Gateway Error\n\nCould not reach the configured AI Model (\`${gateway.llm_provider}\`):\n\n> **${llmErr.message}**\n\nPlease check your API key, endpoint URL, and balance in **[AI Settings → Model & Gateway](/settings/ai)**.`;
+      aiAnswer = `AI Gateway error: ${llmErr.message || 'Please check API key.'}`;
     }
 
-    const finalMessage = aiAnswer || `### ⚠️ AI Gateway Returned Empty\n\nThe AI model did not return a response. Please verify your model parameters in **[AI Settings](/settings/ai)**.`;
+    const finalMessage = aiAnswer || 'No response from AI.';
 
     await this.saveCopilotMessage(userId, activeConvId, 'user', queryType || 'custom', prompt);
     await this.saveCopilotMessage(userId, activeConvId, 'assistant', queryType || 'custom', finalMessage, leads.slice(0, 5).map((l) => l.id), []);
