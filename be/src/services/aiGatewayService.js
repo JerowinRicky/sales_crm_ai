@@ -337,61 +337,294 @@ class AiGatewayService {
     });
   }
 
+  async resolveSecret(submittedValue, dbField) {
+    if (submittedValue && submittedValue !== '••••••••' && !submittedValue.includes('••••')) {
+      return submittedValue.trim();
+    }
+    const [rows] = await pool.query(`SELECT ${dbField} FROM ai_gateway_settings LIMIT 1`);
+    return rows[0]?.[dbField] || '';
+  }
+
   /**
-   * Test connection to configured gateways
+   * Test live connection to configured gateways with real HTTP requests and credentials
    */
   async testConnection({ type, config }) {
     const startTime = Date.now();
 
-    if (type === 'llm') {
-      const provider = config.llm_provider || 'gemini';
-      const model = config.llm_model || 'gemini-1.5-pro';
-      const baseUrl = config.llm_base_url || 'https://generativelanguage.googleapis.com';
+    function validateUrl(rawUrl, label = 'Base URL') {
+      if (!rawUrl || typeof rawUrl !== 'string' || !rawUrl.trim()) {
+        throw new Error(`${label} is required.`);
+      }
+      const trimmed = rawUrl.trim();
+      let parsed;
+      try {
+        parsed = new URL(trimmed);
+      } catch (err) {
+        throw new Error(`Invalid URL format "${trimmed}". Must be a complete URL starting with https:// or http://`);
+      }
+      if (!['http:', 'https:'].includes(parsed.protocol)) {
+        throw new Error(`Invalid protocol "${parsed.protocol}" in URL "${trimmed}". Only https:// or http:// are permitted.`);
+      }
+      return parsed.toString().replace(/\/+$/, '');
+    }
 
-      // Simulation / HTTP check
-      return {
-        success: true,
-        type: 'llm',
-        provider,
-        model,
-        latency_ms: Math.floor(Math.random() * 80) + 120,
-        message: `Successfully connected to ${provider.toUpperCase()} (${model}) gateway at ${baseUrl}`,
-        timestamp: new Date().toISOString(),
+    if (type === 'llm') {
+      const provider = (config.llm_provider || 'gemini').toLowerCase();
+      const model = (config.llm_model || '').trim();
+      const rawBaseUrl = config.llm_base_url || '';
+
+      const cleanBaseUrl = validateUrl(rawBaseUrl, 'LLM Base URL');
+      const apiKey = await this.resolveSecret(config.llm_api_key, 'llm_api_key');
+
+      // Check API Key
+      if (provider !== 'ollama' && (!apiKey || apiKey.length < 5)) {
+        throw new Error(`API Key is required to test ${provider.toUpperCase()} connection. Please paste an API key.`);
+      }
+
+      let testUrl;
+      const headers = {
+        'User-Agent': 'SalesCRM-AI/2.0',
+        'Accept': 'application/json',
       };
+
+      if (provider === 'gemini') {
+        testUrl = `${cleanBaseUrl}/v1beta/models?key=${encodeURIComponent(apiKey)}`;
+      } else if (provider === 'anthropic') {
+        testUrl = `${cleanBaseUrl}/v1/models`;
+        headers['x-api-key'] = apiKey;
+        headers['anthropic-version'] = '2023-06-01';
+      } else if (provider === 'ollama') {
+        testUrl = `${cleanBaseUrl}/api/tags`;
+      } else {
+        // DeepSeek, OpenAI, Groq, Custom
+        testUrl = `${cleanBaseUrl}/models`;
+        headers['Authorization'] = `Bearer ${apiKey}`;
+      }
+
+      let response;
+      try {
+        response = await fetch(testUrl, {
+          method: 'GET',
+          headers,
+          signal: AbortSignal.timeout(12000),
+        });
+      } catch (fetchErr) {
+        if (fetchErr.name === 'TimeoutError' || fetchErr.name === 'AbortError') {
+          throw new Error(`Connection timed out after 12s connecting to "${cleanBaseUrl}". Verify network/firewall.`);
+        }
+        if (fetchErr.cause?.code === 'ENOTFOUND') {
+          throw new Error(`DNS lookup failed for "${cleanBaseUrl}": Hostname does not exist.`);
+        }
+        if (fetchErr.cause?.code === 'ECONNREFUSED') {
+          throw new Error(`Connection refused at "${cleanBaseUrl}": Service is not listening on this port.`);
+        }
+        throw new Error(`Network failure connecting to "${cleanBaseUrl}": ${fetchErr.message}`);
+      }
+
+      const latencyMs = Date.now() - startTime;
+      let resBodyText = '';
+      try {
+        resBodyText = await response.text();
+      } catch (_) {}
+
+      let resJson = null;
+      try {
+        resJson = JSON.parse(resBodyText);
+      } catch (_) {}
+
+      if (response.status === 200) {
+        return {
+          success: true,
+          type: 'llm',
+          provider,
+          model,
+          latency_ms: latencyMs,
+          message: `Successfully connected to ${provider.toUpperCase()} (${model || 'default'}) gateway at ${cleanBaseUrl} (Verified HTTP 200 OK in ${latencyMs}ms).`,
+          timestamp: new Date().toISOString(),
+        };
+      }
+
+      // Handle Authentication / Authorization Errors
+      if (response.status === 401) {
+        const detail = resJson?.error?.message || resJson?.message || 'Invalid or revoked API key.';
+        throw new Error(`Authentication Failed (HTTP 401 Unauthorized) on ${provider.toUpperCase()}: ${detail}`);
+      }
+
+      if (response.status === 403) {
+        const detail = resJson?.error?.message || resJson?.message || 'Access forbidden. Check permissions or organization billing.';
+        throw new Error(`Access Forbidden (HTTP 403) on ${provider.toUpperCase()}: ${detail}`);
+      }
+
+      if (response.status === 404) {
+        throw new Error(`Endpoint not found (HTTP 404) at "${testUrl}". Please verify the Base URL path.`);
+      }
+
+      const errorMsg = resJson?.error?.message || resJson?.message || response.statusText || resBodyText.slice(0, 150);
+      throw new Error(`${provider.toUpperCase()} returned HTTP ${response.status}: ${errorMsg}`);
     }
 
     if (type === 'whatsapp') {
-      const provider = config.whatsapp_provider || 'meta';
-      const endpoint = config.whatsapp_api_endpoint || 'https://graph.facebook.com/v19.0';
-      const phoneId = config.whatsapp_phone_number_id || 'Not configured';
+      const provider = (config.whatsapp_provider || 'meta').toLowerCase();
+      const rawEndpoint = config.whatsapp_api_endpoint || 'https://graph.facebook.com/v19.0';
+      const cleanEndpoint = validateUrl(rawEndpoint, 'WhatsApp API Endpoint');
+      const apiKey = await this.resolveSecret(config.whatsapp_api_key, 'whatsapp_api_key');
+      const phoneId = (config.whatsapp_phone_number_id || '').trim();
 
-      return {
-        success: true,
-        type: 'whatsapp',
-        provider,
-        phone_id: phoneId,
-        latency_ms: Math.floor(Math.random() * 60) + 90,
-        message: `WhatsApp API gateway validated (${provider.toUpperCase()} at ${endpoint}). Ready to dispatch alerts.`,
-        timestamp: new Date().toISOString(),
-      };
+      if (!apiKey || apiKey.length < 5) {
+        throw new Error(`WhatsApp API Token / Key is required. Please paste your access token.`);
+      }
+
+      if (provider === 'meta') {
+        if (!phoneId) {
+          throw new Error('Meta WhatsApp Phone Number ID is required to test gateway.');
+        }
+
+        const testUrl = `${cleanEndpoint}/${encodeURIComponent(phoneId)}`;
+        let response;
+        try {
+          response = await fetch(testUrl, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${apiKey}`,
+              'Accept': 'application/json',
+            },
+            signal: AbortSignal.timeout(12000),
+          });
+        } catch (fetchErr) {
+          throw new Error(`Network failure connecting to Meta WhatsApp API at "${cleanEndpoint}": ${fetchErr.message}`);
+        }
+
+        const latencyMs = Date.now() - startTime;
+        let resJson = null;
+        try {
+          resJson = await response.json();
+        } catch (_) {}
+
+        if (response.status === 200) {
+          const verifiedName = resJson.verified_name || resJson.display_phone_number || phoneId;
+          const quality = resJson.quality_rating || 'GREEN';
+          return {
+            success: true,
+            type: 'whatsapp',
+            provider: 'meta',
+            phone_id: phoneId,
+            latency_ms: latencyMs,
+            message: `Meta WhatsApp Cloud API Verified! Phone ID: ${phoneId} ("${verifiedName}", Quality: ${quality}). Ready for MD alerts.`,
+            timestamp: new Date().toISOString(),
+          };
+        }
+
+        const detail = resJson?.error?.message || response.statusText;
+        throw new Error(`Meta WhatsApp API returned HTTP ${response.status}: ${detail}`);
+      }
+
+      // Gupshup, Twilio, Custom
+      let response;
+      try {
+        response = await fetch(cleanEndpoint, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Accept': 'application/json',
+          },
+          signal: AbortSignal.timeout(12000),
+        });
+      } catch (fetchErr) {
+        throw new Error(`Network error connecting to WhatsApp endpoint "${cleanEndpoint}": ${fetchErr.message}`);
+      }
+
+      const latencyMs = Date.now() - startTime;
+      if (response.status < 400) {
+        return {
+          success: true,
+          type: 'whatsapp',
+          provider,
+          latency_ms: latencyMs,
+          message: `Connected to ${provider.toUpperCase()} WhatsApp gateway at ${cleanEndpoint} (HTTP ${response.status} in ${latencyMs}ms).`,
+          timestamp: new Date().toISOString(),
+        };
+      }
+
+      throw new Error(`${provider.toUpperCase()} WhatsApp gateway returned HTTP ${response.status} ${response.statusText}`);
     }
 
     if (type === 'telephony') {
-      const provider = config.telephony_provider || 'exotel';
-      const callerId = config.telephony_caller_id || 'Not configured';
+      const provider = (config.telephony_provider || 'exotel').toLowerCase();
+      const rawBaseUrl = config.telephony_base_url || 'https://api.exotel.com/v1';
+      const cleanBaseUrl = validateUrl(rawBaseUrl, 'Telephony Base URL');
+      const accountSid = (config.telephony_account_sid || '').trim();
+      const authToken = await this.resolveSecret(config.telephony_auth_token, 'telephony_auth_token');
 
-      return {
-        success: true,
-        type: 'telephony',
-        provider,
-        caller_id: callerId,
-        latency_ms: Math.floor(Math.random() * 70) + 110,
-        message: `Telephony & Voice agent channel reachable (${provider.toUpperCase()} Caller ID: ${callerId}). SIP trunk operational.`,
-        timestamp: new Date().toISOString(),
+      if (!accountSid) {
+        throw new Error(`Telephony Account SID / Key is required.`);
+      }
+      if (!authToken || authToken.length < 5) {
+        throw new Error(`Telephony Auth Token / Secret is required.`);
+      }
+
+      let testUrl;
+      const headers = {
+        'Accept': 'application/json',
+        'User-Agent': 'SalesCRM-AI/2.0',
       };
+
+      if (provider === 'twilio') {
+        testUrl = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(accountSid)}.json`;
+        const creds = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
+        headers['Authorization'] = `Basic ${creds}`;
+      } else if (provider === 'exotel') {
+        testUrl = `${cleanBaseUrl}/Accounts/${encodeURIComponent(accountSid)}`;
+        const creds = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
+        headers['Authorization'] = `Basic ${creds}`;
+      } else if (provider === 'bland_ai') {
+        testUrl = 'https://api.bland.ai/v1/me';
+        headers['Authorization'] = authToken;
+      } else if (provider === 'vapi') {
+        testUrl = 'https://api.vapi.ai/assistant';
+        headers['Authorization'] = `Bearer ${authToken}`;
+      } else {
+        testUrl = cleanBaseUrl;
+        headers['Authorization'] = `Bearer ${authToken}`;
+      }
+
+      let response;
+      try {
+        response = await fetch(testUrl, {
+          method: 'GET',
+          headers,
+          signal: AbortSignal.timeout(12000),
+        });
+      } catch (fetchErr) {
+        throw new Error(`Network failure connecting to Telephony provider at "${testUrl}": ${fetchErr.message}`);
+      }
+
+      const latencyMs = Date.now() - startTime;
+      let resJson = null;
+      try {
+        resJson = await response.json();
+      } catch (_) {}
+
+      if (response.status === 200) {
+        return {
+          success: true,
+          type: 'telephony',
+          provider,
+          latency_ms: latencyMs,
+          message: `Telephony & Voice agent channel verified (${provider.toUpperCase()} Account: ${accountSid}). Verified HTTP 200 OK (${latencyMs}ms).`,
+          timestamp: new Date().toISOString(),
+        };
+      }
+
+      if (response.status === 401 || response.status === 403) {
+        const detail = resJson?.message || 'Invalid Account SID or Auth Token';
+        throw new Error(`Telephony Authentication Failed (HTTP ${response.status}): ${detail}`);
+      }
+
+      const detail = resJson?.message || response.statusText;
+      throw new Error(`${provider.toUpperCase()} Telephony returned HTTP ${response.status}: ${detail}`);
     }
 
-    throw new Error(`Unknown gateway test type: ${type}`);
+    throw new Error(`Unknown gateway type: "${type}"`);
   }
 }
 

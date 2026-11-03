@@ -71,8 +71,8 @@ exports.testConnection = async (req, res) => {
     const result = await aiGatewayService.testConnection({ type, config: config || {} });
     res.json({ success: true, data: result });
   } catch (err) {
-    console.error('aiGatewayController.testConnection error:', err);
-    res.status(500).json({ success: false, message: err.message || 'Gateway connection test failed' });
+    console.error('aiGatewayController.testConnection error:', err.message);
+    res.status(400).json({ success: false, message: err.message || 'Gateway connection test failed' });
   }
 };
 
