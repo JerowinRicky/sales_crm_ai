@@ -26,6 +26,148 @@ import toast from 'react-hot-toast';
 import { aiCopilotAPI } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 
+/**
+ * Elegant inline markdown parser that renders headers, bold, italics, bullets,
+ * blockquotes, code, and clickable CRM links without raw markdown characters like * or ###.
+ */
+function renderInlineMarkdown(text, navigate) {
+  if (!text) return null;
+
+  // Tokenizer regex matching bold-links, links, bold, italic, code
+  const regex = /(\*\*\[([^\]]+)\]\(([^)]+)\)\*\*|\[([^\]]+)\]\(([^)]+)\)|\*\*([^*]+)\*\*|\*([^*]+)\*|`([^`]+)`)/g;
+  const elements = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      elements.push(text.substring(lastIndex, match.index));
+    }
+
+    if (match[2] && match[3]) {
+      // **[Link](url)**
+      const linkText = match[2];
+      const url = match[3];
+      elements.push(
+        <button
+          key={match.index}
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            if (url.startsWith('http')) window.open(url, '_blank');
+            else navigate(url);
+          }}
+          className="font-bold text-blue-600 hover:text-blue-800 underline cursor-pointer"
+        >
+          {linkText}
+        </button>
+      );
+    } else if (match[4] && match[5]) {
+      // [Link](url)
+      const linkText = match[4];
+      const url = match[5];
+      elements.push(
+        <button
+          key={match.index}
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            if (url.startsWith('http')) window.open(url, '_blank');
+            else navigate(url);
+          }}
+          className="text-blue-600 hover:text-blue-800 underline font-medium cursor-pointer"
+        >
+          {linkText}
+        </button>
+      );
+    } else if (match[6]) {
+      // **bold**
+      elements.push(
+        <strong key={match.index} className="font-semibold text-gray-900">
+          {match[6]}
+        </strong>
+      );
+    } else if (match[7]) {
+      // *italic*
+      elements.push(
+        <em key={match.index} className="italic text-gray-700">
+          {match[7]}
+        </em>
+      );
+    } else if (match[8]) {
+      // `code`
+      elements.push(
+        <code key={match.index} className="px-1.5 py-0.5 rounded bg-gray-100 text-blue-700 font-mono text-[11px] font-medium">
+          {match[8]}
+        </code>
+      );
+    }
+
+    lastIndex = regex.lastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    elements.push(text.substring(lastIndex));
+  }
+
+  return elements.length > 0 ? elements : text;
+}
+
+function MarkdownRenderer({ message, isUser, navigate }) {
+  if (!message) return null;
+  if (isUser) {
+    return <div className="whitespace-pre-wrap">{message}</div>;
+  }
+
+  const lines = message.split('\n');
+  const rendered = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      rendered.push(<div key={`blank-${i}`} className="h-2" />);
+      continue;
+    }
+
+    if (trimmed.startsWith('### ')) {
+      rendered.push(
+        <h3 key={i} className="text-sm font-bold text-gray-900 mt-2.5 mb-1 flex items-center gap-1.5 border-b border-gray-100 pb-1">
+          {renderInlineMarkdown(trimmed.substring(4), navigate)}
+        </h3>
+      );
+    } else if (trimmed.startsWith('#### ')) {
+      rendered.push(
+        <h4 key={i} className="text-xs font-bold text-gray-800 mt-2 mb-1">
+          {renderInlineMarkdown(trimmed.substring(5), navigate)}
+        </h4>
+      );
+    } else if (trimmed.startsWith('> ')) {
+      rendered.push(
+        <div key={i} className="my-2 p-2.5 bg-blue-50/80 border-l-3 border-blue-500 rounded-r-lg text-xs text-blue-950 leading-relaxed shadow-xs">
+          {renderInlineMarkdown(trimmed.substring(2), navigate)}
+        </div>
+      );
+    } else if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+      rendered.push(
+        <div key={i} className="flex items-start gap-2 my-1 text-xs text-gray-700 pl-1 leading-relaxed">
+          <span className="text-blue-500 font-bold shrink-0 mt-0.5">•</span>
+          <span className="flex-1">{renderInlineMarkdown(trimmed.substring(2), navigate)}</span>
+        </div>
+      );
+    } else {
+      rendered.push(
+        <p key={i} className="text-xs text-gray-700 leading-relaxed my-0.5">
+          {renderInlineMarkdown(line, navigate)}
+        </p>
+      );
+    }
+  }
+
+  return <div className="space-y-0.5">{rendered}</div>;
+}
+
 export default function LeadAiCopilotDrawer({ isOpen, onClose }) {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -284,7 +426,7 @@ export default function LeadAiCopilotDrawer({ isOpen, onClose }) {
                         : 'bg-white text-gray-800 border border-gray-200 rounded-bl-xs shadow-xs'
                     }`}
                   >
-                    <div className="whitespace-pre-wrap font-sans">{m.message}</div>
+                    <MarkdownRenderer message={m.message} isUser={isUser} navigate={navigate} />
                   </div>
 
                   {/* Render Lead Cards inside AI Responses */}
@@ -416,3 +558,4 @@ export default function LeadAiCopilotDrawer({ isOpen, onClose }) {
     </div>
   );
 }
+

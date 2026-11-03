@@ -59,3 +59,4 @@ exports.clearChatHistory = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error clearing chat history' });
   }
 };
+
