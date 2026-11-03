@@ -562,6 +562,64 @@ class AiRagService {
     // INTENT 4: CUSTOM GROUNDED CHAT QUERY
     // =========================================================================
     const userPrompt = prompt.trim();
+
+    // Check if an external LLM gateway has an API key configured
+    const [gwRows] = await pool.query('SELECT * FROM ai_gateway_settings ORDER BY id ASC LIMIT 1');
+    const gateway = gwRows?.[0] || null;
+    const hasLlmKey = !!(gateway && gateway.llm_api_key && gateway.llm_api_key.trim().length > 0);
+
+    // 1. Handle Greetings / Self-Identity queries gracefully
+    const isGreeting = /^(hi|hello|hey|hola|vanakkam|namaste|good\s*(morning|afternoon|evening)|who\s*are\s*you|who\s*is\s*answering|help)\b/i.test(userPrompt);
+    if (isGreeting) {
+      let welcomeMsg = `### 👋 Hello! I am your SalesCRM Copilot\n\n` +
+        `I am your intelligent sales assistant, designed to help you analyze your CRM pipeline.\n\n`;
+
+      if (hasLlmKey) {
+        welcomeMsg += `🟢 **Active AI Provider:** \`${gateway.llm_provider}\` (Model: \`${gateway.llm_model}\`)\n\n`;
+      } else {
+        welcomeMsg += `⚠️ **AI Gateway Notice:** No external AI model API key (such as Google Gemini, DeepSeek, or OpenAI) is configured yet in **[AI Settings](/settings/ai)**.\n\n` +
+          `Right now, I am operating using the **Local CRM Database Engine** running directly on your CRM server. I search and evaluate your database records strictly from your MySQL/MariaDB database.\n\n`;
+      }
+
+      welcomeMsg += `**You can ask me to:**\n` +
+        `- 🔥 Identify hot leads with high closure probability\n` +
+        `- ⚡ Suggest the next engagement action and optimal timing\n` +
+        `- 🎯 Explain why leads were marked Interested or Not Interested\n` +
+        `- 🔍 Search specific companies, clients, or deal stages\n\n` +
+        `> 💡 *Click any of the quick action buttons above to get started instantly.*`;
+
+      await this.saveCopilotMessage(user?.id || 1, 'user', 'custom', userPrompt);
+      await this.saveCopilotMessage(user?.id || 1, 'assistant', 'custom', welcomeMsg, [], []);
+
+      return {
+        query_type: 'custom',
+        message: welcomeMsg,
+        cards: [],
+        grounded_source: hasLlmKey ? `${gateway.llm_provider} (Model & Gateway)` : 'Local CRM Database Engine (No external API key)',
+      };
+    }
+
+    // 2. Handle very short queries (less than 2 characters like "s" or "a")
+    if (userPrompt.length < 2) {
+      const shortMsg = `### 🔍 CRM Search Assistance\n\n` +
+        `Please type a specific search term (at least 2 characters) or click one of the quick options above.\n\n` +
+        (hasLlmKey 
+          ? `*AI Gateway: ${gateway.llm_provider} (${gateway.llm_model})*`
+          : `> ℹ️ *Note: No external AI is configured in AI Settings. Answering via Local CRM Database.*`
+        );
+
+      await this.saveCopilotMessage(user?.id || 1, 'user', 'custom', userPrompt);
+      await this.saveCopilotMessage(user?.id || 1, 'assistant', 'custom', shortMsg, [], []);
+
+      return {
+        query_type: 'custom',
+        message: shortMsg,
+        cards: [],
+        grounded_source: 'Local CRM Input Validation',
+      };
+    }
+
+    // 3. Search matching CRM leads
     const matchingLeads = leads.filter((l) => {
       const q = userPrompt.toLowerCase();
       return (
@@ -577,27 +635,45 @@ class AiRagService {
 
     const targetList = matchingLeads.length > 0 ? matchingLeads : leads.slice(0, 8);
 
-    let markdownResponse = `### 🤖 SalesCRM Intelligence Answer\n\n` +
-      `Grounded strictly in your **CRM Application Database** (analyzing ${leads.length} leads across active pipelines):\n\n`;
+    // If an external LLM is configured with an API key, invoke the LLM with CRM context
+    let llmResponse = null;
+    if (hasLlmKey) {
+      const contextSummary = leads.slice(0, 15).map((l, i) =>
+        `${i + 1}. [Lead #${l.id}] ${l.title} | Company: ${l.company_name || l.customer_company || 'N/A'} | Stage: ${l.stage_name || 'New'} | Value: ${l.currency || '₹'}${Number(l.estimated_value || 0).toLocaleString()} | Contact: ${l.contact_name || 'N/A'} (${l.contact_phone || 'N/A'})`
+      ).join('\n');
 
-    if (matchingLeads.length > 0) {
-      markdownResponse += `Found **${matchingLeads.length} matching lead(s)** relevant to your inquiry:\n\n` +
-        matchingLeads.map((m, i) =>
-          `**${i + 1}. [${m.title}](/leads/${m.id})**\n` +
-          `- **Company:** ${m.company_name || m.customer_company || 'N/A'} | **Stage:** ${m.stage_name || 'New'}\n` +
-          `- **Value:** ${m.currency || '₹'}${Number(m.estimated_value || 0).toLocaleString()} | **Rep:** ${m.salesperson_name || 'Unassigned'}\n` +
-          `- **Contact:** ${m.contact_name || 'N/A'} (${m.contact_phone || 'No phone'})\n` +
-          (m.city ? `- **Location:** ${m.city}, ${m.state || 'India'}\n` : '')
-        ).join('\n');
-    } else {
-      markdownResponse += `Here is an overview of the top active leads currently in your CRM pipeline:\n\n` +
-        targetList.map((m, i) =>
-          `**${i + 1}. [${m.title}](/leads/${m.id}) — ${m.company_name || m.customer_company || 'Corporate'}** (${m.stage_name || 'New'})\n` +
-          `- **Deal Size:** ${m.currency || '₹'}${Number(m.estimated_value || 0).toLocaleString()} | **Owner:** ${m.salesperson_name || 'Unassigned'}\n`
-        ).join('\n');
+      const systemPrompt = `You are SalesCRM Copilot, an AI sales assistant. Answer the user question based strictly on this CRM application data:\n${contextSummary}\n\nGround your answer strictly in these CRM facts. Do not invent details not present in the data.`;
+      llmResponse = await this.callConfiguredLLM(gateway, systemPrompt, userPrompt);
     }
 
-    markdownResponse += `\n\n> 💬 *You can also click the quick chips above to automatically identify hot leads, plan next engagements, or review qualification reasons.*`;
+    let markdownResponse = '';
+    if (llmResponse) {
+      markdownResponse = `### 🤖 ${gateway.llm_provider.toUpperCase()} AI Answer\n\n` +
+        llmResponse +
+        `\n\n> 🌐 *Grounded via Model & Gateway (${gateway.llm_provider}: ${gateway.llm_model}) on active CRM records.*`;
+    } else {
+      markdownResponse = `### 🤖 SalesCRM Intelligence Answer\n\n` +
+        `Grounded strictly in your **CRM Application Database** (analyzing ${leads.length} leads across active pipelines):\n\n`;
+
+      if (matchingLeads.length > 0) {
+        markdownResponse += `Found **${matchingLeads.length} matching lead(s)** relevant to your inquiry:\n\n` +
+          matchingLeads.map((m, i) =>
+            `**${i + 1}. [${m.title}](/leads/${m.id})**\n` +
+            `- **Company:** ${m.company_name || m.customer_company || 'N/A'} | **Stage:** ${m.stage_name || 'New'}\n` +
+            `- **Value:** ${m.currency || '₹'}${Number(m.estimated_value || 0).toLocaleString()} | **Rep:** ${m.salesperson_name || 'Unassigned'}\n` +
+            `- **Contact:** ${m.contact_name || 'N/A'} (${m.contact_phone || 'No phone'})\n` +
+            (m.city ? `- **Location:** ${m.city}, ${m.state || 'India'}\n` : '')
+          ).join('\n');
+      } else {
+        markdownResponse += `Here is an overview of the top active leads currently in your CRM pipeline:\n\n` +
+          targetList.map((m, i) =>
+            `**${i + 1}. [${m.title}](/leads/${m.id}) — ${m.company_name || m.customer_company || 'Corporate'}** (${m.stage_name || 'New'})\n` +
+            `- **Deal Size:** ${m.currency || '₹'}${Number(m.estimated_value || 0).toLocaleString()} | **Owner:** ${m.salesperson_name || 'Unassigned'}\n`
+          ).join('\n');
+      }
+
+      markdownResponse += `\n\n> ℹ️ *Source: Local CRM Database Query Engine (No external LLM API key configured in AI Settings).*`;
+    }
 
     await this.saveCopilotMessage(user?.id || 1, 'user', 'custom', userPrompt);
     await this.saveCopilotMessage(user?.id || 1, 'assistant', 'custom', markdownResponse, targetList.map((t) => t.id), targetList);
@@ -606,8 +682,65 @@ class AiRagService {
       query_type: 'custom',
       message: markdownResponse,
       cards: targetList,
-      grounded_source: 'CRM Application Database (Strict Grounding)',
+      grounded_source: hasLlmKey ? `${gateway.llm_provider} (Model & Gateway)` : 'Local CRM Database (Strict Grounding)',
     };
+  }
+
+  /**
+   * Helper to call configured external LLM (Gemini, DeepSeek, OpenAI, Groq, Ollama)
+   */
+  async callConfiguredLLM(gateway, systemPrompt, userMessage) {
+    if (!gateway || !gateway.llm_api_key || !gateway.llm_base_url) return null;
+    const provider = (gateway.llm_provider || 'openai').toLowerCase();
+    const baseUrl = gateway.llm_base_url.replace(/\/+$/, '');
+    const model = gateway.llm_model;
+
+    try {
+      if (provider === 'gemini') {
+        const url = `${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${gateway.llm_api_key}`;
+        const resp = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [
+              { role: 'user', parts: [{ text: `${systemPrompt}\n\nQuestion:\n${userMessage}` }] },
+            ],
+          }),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (resp.ok) {
+          const json = await resp.json();
+          return json.candidates?.[0]?.content?.parts?.[0]?.text || null;
+        }
+      } else {
+        // OpenAI / DeepSeek / Groq / Anthropic-proxy / Ollama
+        const url = `${baseUrl}/chat/completions`;
+        const resp = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${gateway.llm_api_key}`,
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userMessage },
+            ],
+            temperature: Number(gateway.llm_temperature) || 0.7,
+            max_tokens: Number(gateway.llm_max_tokens) || 2048,
+          }),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (resp.ok) {
+          const json = await resp.json();
+          return json.choices?.[0]?.message?.content || null;
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to reach configured external LLM:', err.message);
+    }
+    return null;
   }
 
   /**
@@ -671,3 +804,4 @@ class AiRagService {
 }
 
 module.exports = new AiRagService();
+
