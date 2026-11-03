@@ -231,6 +231,33 @@ class AiRagService {
    * Core AI Copilot Query Engine (RAG strictly grounded on CRM Application Data + Web Search)
    */
   async processCopilotQuery({ queryType = 'custom', prompt = '', user = null }) {
+    // 1. STRICT REQUIREMENT: Only work if AI Gateway has an API key configured.
+    // Fetch active AI Gateway settings
+    const [gwRows] = await pool.query('SELECT * FROM ai_gateway_settings ORDER BY id ASC LIMIT 1');
+    const gateway = gwRows?.[0] || null;
+    const hasLlmKey = !!(gateway && gateway.llm_api_key && gateway.llm_api_key.trim().length > 0);
+
+    if (!hasLlmKey) {
+      const notConfiguredMsg = `### ⚠️ AI Is Not Configured\n\n` +
+        `No AI Model or API key has been configured in **[AI Settings → Model & Gateway](/settings/ai)**.\n\n` +
+        `The AI Copilot strictly requires an active AI Model (such as Google Gemini, DeepSeek, OpenAI, or Groq) with a valid API key to process questions and analyze your CRM leads.\n\n` +
+        `**To configure your AI:**\n` +
+        `1. Open **[AI Settings](/settings/ai)** from the sidebar navigation.\n` +
+        `2. In the **Model & Gateway** tab, choose your provider (e.g. **Google Gemini**, **DeepSeek**, or **OpenAI**).\n` +
+        `3. Enter your valid **API Key** and click **Save Configuration**.\n\n` +
+        `Once configured, every question and lead analysis will be sent directly to your chosen AI model with live CRM data context.`;
+
+      await this.saveCopilotMessage(user?.id || 1, 'user', queryType || 'custom', prompt);
+      await this.saveCopilotMessage(user?.id || 1, 'assistant', queryType || 'custom', notConfiguredMsg, [], []);
+
+      return {
+        query_type: queryType || 'custom',
+        message: notConfiguredMsg,
+        cards: [],
+        grounded_source: 'AI Not Configured',
+      };
+    }
+
     const ragSettings = await this.getRagSettings();
     const crmData = await this.getCRMApplicationData(ragSettings.max_context_leads || 35);
     const { leads, calls, activities } = crmData;
@@ -248,441 +275,60 @@ class AiRagService {
       activitiesByLead[a.lead_id].push(a);
     }
 
-    // =========================================================================
-    // INTENT 1: IDENTIFY HOT LEADS
-    // =========================================================================
-    if (queryType === 'hot_leads' || /hot\s*lead|identify\s*hot/i.test(prompt)) {
-      const hotLeads = [];
-      const analyzedCards = [];
+    // Build RAG context string for the AI model
+    const crmContextText = leads.map((l, i) => {
+      const leadCalls = callsByLead[l.id] || [];
+      const callNotes = leadCalls.map((c) => `[Call: ${c.call_result || 'Completed'} - ${c.description || 'No notes'}]`).join('; ');
+      return `[Lead #${l.id}] Title: "${l.title}" | Company: "${l.company_name || l.customer_company || 'N/A'}" | Stage: "${l.stage_name || 'New'}" | Value: ${l.currency || '₹'}${Number(l.estimated_value || 0).toLocaleString()} | Priority: "${l.priority}" | Rep: "${l.salesperson_name || 'Unassigned'}" | Contact: "${l.contact_name || 'N/A'}" (${l.contact_phone || 'N/A'})${callNotes ? ` | Call History: ${callNotes}` : ''}`;
+    }).join('\n');
 
-      for (const l of leads) {
-        let score = 50; // base score
+    const systemPrompt = `You are SalesCRM Copilot, an enterprise AI assistant embedded inside the sales CRM.
+You must answer strictly using the application CRM records provided below.
+Rules:
+1. Always ground your facts in the provided CRM data. Do not hallucinate data that does not exist.
+2. When mentioning leads, quote the Lead ID and title in format [Lead Title](/leads/ID).
+3. If asked about Hot Leads, identify high-priority, high-value, and late-stage leads, explaining why each is hot.
+4. If asked about Next Engagement, suggest the specific next action (WhatsApp follow-up, demo, commercial call) and optimal timing.
+5. If asked about Qualification Reasoning (Interested vs Not Interested), give the exact justification from the call history and stage.
 
-        // Value factor
-        const val = Number(l.estimated_value) || 0;
-        if (val >= 1000000) score += 20;
-        else if (val >= 300000) score += 15;
-        else if (val >= 100000) score += 10;
+CRM APPLICATION RECORDS (${leads.length} Active Leads):
+${crmContextText}`;
 
-        // Priority factor
-        if (l.priority === 'critical') score += 15;
-        else if (l.priority === 'high') score += 10;
-
-        // Probability
-        if (Number(l.probability) >= 70) score += 15;
-        else if (Number(l.probability) >= 50) score += 10;
-
-        // Stage progress
-        const stageName = (l.stage_name || '').toLowerCase();
-        if (stageName.includes('negotiat') || stageName.includes('proposal') || stageName.includes('contract')) {
-          score += 15;
-        }
-
-        // Recent calls outcome
-        const leadCalls = callsByLead[l.id] || [];
-        const hasPositiveCall = leadCalls.some((c) =>
-          (c.call_result || '').toLowerCase().includes('interested') ||
-          (c.description || '').toLowerCase().includes('budget approved')
-        );
-        if (hasPositiveCall) score += 15;
-
-        // Cap at 98
-        score = Math.min(score, 98);
-        const isHot = score >= 80;
-
-        const company = l.company_name || l.customer_company || 'Corporate Client';
-
-        let externalInfo = null;
-        if (isHot && ragSettings.enable_external_company_search) {
-          externalInfo = await this.searchCompanyExternal(company, l.industry);
-        }
-
-        let hotReason = '';
-        if (isHot) {
-          const reasons = [];
-          if (val > 0) reasons.push(`High commercial deal value of ${l.currency || '₹'}${val.toLocaleString()}`);
-          if (l.stage_name) reasons.push(`Advanced pipeline stage (${l.stage_name}) with ${l.probability || 70}% close probability`);
-          if (l.priority === 'critical' || l.priority === 'high') reasons.push(`${l.priority.toUpperCase()} priority classification`);
-          if (hasPositiveCall) reasons.push('Recent voice call validated strong client buying interest');
-          if (externalInfo?.summary) reasons.push(`Market Context: ${externalInfo.summary.slice(0, 140)}...`);
-          hotReason = reasons.join('. ');
-        }
-
-        // Store into ai_lead_intelligence table
-        await pool.query(`
-          INSERT INTO ai_lead_intelligence (
-            lead_id, lead_score, is_hot_lead, hot_lead_reason,
-            qualification_status, company_external_summary, company_industry_tags, last_analyzed_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-          ON DUPLICATE KEY UPDATE
-            lead_score = VALUES(lead_score),
-            is_hot_lead = VALUES(is_hot_lead),
-            hot_lead_reason = VALUES(hot_lead_reason),
-            company_external_summary = VALUES(company_external_summary),
-            company_industry_tags = VALUES(company_industry_tags),
-            last_analyzed_at = CURRENT_TIMESTAMP
-        `, [
-          l.id,
-          score,
-          isHot ? 1 : 0,
-          hotReason,
-          isHot ? 'interested' : 'pending',
-          externalInfo?.summary || null,
-          l.industry || null,
-        ]);
-
-        if (isHot) {
-          hotLeads.push({
-            lead: l,
-            score,
-            hotReason,
-            externalInfo,
-          });
-
-          analyzedCards.push({
-            id: l.id,
-            title: l.title,
-            company: company,
-            contact_name: l.contact_name,
-            contact_phone: l.contact_phone,
-            estimated_value: val,
-            currency: l.currency || '₹',
-            score,
-            stage: l.stage_name,
-            assigned_to: l.salesperson_name || 'Unassigned',
-            hot_reason: hotReason,
-            external_intelligence: externalInfo?.summary || null,
-            external_source: externalInfo?.source || null,
-          });
-        }
-      }
-
-      // Sort hot leads by score descending
-      analyzedCards.sort((a, b) => b.score - a.score);
-
-      const markdownResponse = `### 🔥 AI Hot Lead Identification (${analyzedCards.length} Hot Leads Detected)\n\n` +
-        `Based strictly on your active **CRM Application Data** (analyzing deal size, stage velocity, priority weighting, and recent call sentiment)${ragSettings.enable_external_company_search ? ' enriched with verified **External Company Intelligence**' : ''}:\n\n` +
-        analyzedCards.map((c, i) =>
-          `**${i + 1}. [${c.title}](/leads/${c.id}) — ${c.company}**\n` +
-          `- **Quality Score:** \`${c.score}/100\` | **Stage:** ${c.stage} | **Value:** ${c.currency}${c.estimated_value.toLocaleString()}\n` +
-          `- **Assigned Manager:** ${c.assigned_to}\n` +
-          `- **Why it's Hot:** ${c.hot_reason}\n` +
-          (c.external_intelligence ? `- 🌐 **Company Intelligence:** ${c.external_intelligence}\n` : '')
-        ).join('\n') +
-        `\n\n> 💡 **Recommendation:** Direct assigned sales managers to prioritize engagement with these accounts immediately before SLA breach.`;
-
-      // Save to chat messages
-      await this.saveCopilotMessage(user?.id || 1, 'user', 'hot_leads', prompt || 'AI should identify hot lead');
-      await this.saveCopilotMessage(user?.id || 1, 'assistant', 'hot_leads', markdownResponse, analyzedCards.map((c) => c.id), analyzedCards);
-
-      return {
-        query_type: 'hot_leads',
-        message: markdownResponse,
-        cards: analyzedCards,
-        grounded_source: 'CRM Database & Real-Time Deal Signals',
-      };
+    let userPromptToSend = prompt;
+    if (queryType === 'hot_leads' || /hot\s*lead/i.test(prompt)) {
+      userPromptToSend = 'Identify the hot leads from the CRM data with high probability of closing. Give each a quality score (0-100) and explain why it is classified as a hot lead.';
+    } else if (queryType === 'next_engagement' || /next\s*engagement/i.test(prompt)) {
+      userPromptToSend = 'Review the active leads and recommend the next best sales engagement to take for each priority lead and the optimal time to do it.';
+    } else if (queryType === 'qualification_reasoning' || /interested|qualification/i.test(prompt)) {
+      userPromptToSend = 'Review the leads and explain why leads were marked Interested or Not Interested based on the CRM call histories and notes.';
     }
 
-    // =========================================================================
-    // INTENT 2: NEXT BEST ENGAGEMENT & TIMING
-    // =========================================================================
-    if (queryType === 'next_engagement' || /next\s*engagement|what\s*to\s*do|next\s*action|when\s*to/i.test(prompt)) {
-      const recommendations = [];
-
-      for (const l of leads.slice(0, 15)) {
-        const company = l.company_name || l.customer_company || 'Corporate Client';
-        const leadCalls = callsByLead[l.id] || [];
-        const leadActs = activitiesByLead[l.id] || [];
-
-        let action = '';
-        let timing = '';
-        let reasoning = '';
-
-        const stage = (l.stage_name || '').toLowerCase();
-        if (stage.includes('proposal') || stage.includes('quote')) {
-          action = 'WhatsApp Commercial Follow-up & Pricing Clarification';
-          timing = 'Tomorrow at 10:30 AM';
-          reasoning = 'Proposal was dispatched recently. Decision makers review proposals during early business hours.';
-        } else if (stage.includes('negotiat')) {
-          action = 'Executive Alignment Meeting / WhatsApp Call with MD';
-          timing = 'Within 24 Hours (Wednesday afternoon)';
-          reasoning = 'Commercial terms are under negotiation. Quick executive touchpoint prevents deal stalling.';
-        } else if (leadCalls.length === 0) {
-          action = 'Initial Discovery Voice Call via Mobile GSM';
-          timing = 'Today between 2:30 PM – 4:00 PM';
-          reasoning = 'New inbound lead with no call attempts logged in CRM.';
-        } else {
-          action = 'Tailored Product Architecture Walkthrough via Video Demo';
-          timing = 'Thursday at 11:00 AM';
-          reasoning = 'Client engaged previously; technical proof-of-concept will accelerate stage progression.';
-        }
-
-        // Store into intelligence table
-        await pool.query(`
-          INSERT INTO ai_lead_intelligence (
-            lead_id, next_engagement_action, next_engagement_timing, last_analyzed_at
-          ) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-          ON DUPLICATE KEY UPDATE
-            next_engagement_action = VALUES(next_engagement_action),
-            next_engagement_timing = VALUES(next_engagement_timing),
-            last_analyzed_at = CURRENT_TIMESTAMP
-        `, [l.id, action, timing]);
-
-        recommendations.push({
-          id: l.id,
-          title: l.title,
-          company,
-          contact_name: l.contact_name,
-          contact_phone: l.contact_phone,
-          stage: l.stage_name,
-          assigned_to: l.salesperson_name || 'Unassigned',
-          recommended_action: action,
-          recommended_timing: timing,
-          engagement_reason: reasoning,
-        });
-      }
-
-      const markdownResponse = `### ⚡ AI Next Best Engagement & Optimal Timing Engine\n\n` +
-        `Analyzed **${recommendations.length} priority leads** from your CRM application data. Here are the precise next engagement actions and optimal times calculated to maximize response rates:\n\n` +
-        recommendations.map((r, i) =>
-          `**${i + 1}. [${r.title}](/leads/${r.id}) — ${r.company}**\n` +
-          `- **Recommended Action:** **${r.recommended_action}**\n` +
-          `- **Optimal Timing:** 🕒 \`${r.recommended_timing}\`\n` +
-          `- **Assigned Rep:** ${r.assigned_to} | **Stage:** ${r.stage}\n` +
-          `- **AI Strategic Justification:** ${r.engagement_reason}\n`
-        ).join('\n') +
-        `\n\n> 📲 *Automated WhatsApp alerts can be dispatched directly to sales reps with this exact schedule.*`;
-
-      await this.saveCopilotMessage(user?.id || 1, 'user', 'next_engagement', prompt || 'AI should tell what should be next engagement to do and when');
-      await this.saveCopilotMessage(user?.id || 1, 'assistant', 'next_engagement', markdownResponse, recommendations.map((r) => r.id), recommendations);
-
-      return {
-        query_type: 'next_engagement',
-        message: markdownResponse,
-        cards: recommendations,
-        grounded_source: 'CRM Touchpoint Velocity & Activity Patterns',
-      };
+    let aiAnswer = null;
+    try {
+      aiAnswer = await this.callConfiguredLLM(gateway, systemPrompt, userPromptToSend);
+    } catch (llmErr) {
+      aiAnswer = `### ⚠️ AI Gateway Error\n\nCould not reach the configured AI Model (\`${gateway.llm_provider}\`):\n\n> **${llmErr.message}**\n\nPlease check your API key, endpoint URL, and balance in **[AI Settings → Model & Gateway](/settings/ai)**.`;
     }
 
-    // =========================================================================
-    // INTENT 3: QUALIFICATION REASONING (WHY INTERESTED vs NOT INTERESTED)
-    // =========================================================================
-    if (queryType === 'qualification_reasoning' || /why.*not\s*interested|why.*interested|qualification\s*reason/i.test(prompt)) {
-      const qualifiedLeads = [];
+    const finalMessage = aiAnswer || `### ⚠️ AI Gateway Returned Empty\n\nThe AI model did not return a response. Please verify your model parameters in **[AI Settings](/settings/ai)**.`;
 
-      for (const l of leads.slice(0, 15)) {
-        const company = l.company_name || l.customer_company || 'Corporate Client';
-        const leadCalls = callsByLead[l.id] || [];
-        const isClosedLost = Boolean(l.is_closed && !l.is_won) || Boolean(l.lost_reason);
-        const isWonOrHot = Boolean(l.is_won) || Number(l.probability) >= 70;
-
-        let status = 'pending';
-        let reason = '';
-
-        if (isClosedLost || l.lost_reason) {
-          status = 'not_interested';
-          reason = l.lost_reason
-            ? `Client declined opportunity. CRM record states: "${l.lost_reason}".`
-            : 'AI voice call interaction resulted in not interested: Client mentioned budget freeze for the current fiscal quarter and existing vendor contract lock-in.';
-        } else if (isWonOrHot) {
-          status = 'interested';
-          reason = l.won_reason
-            ? `Client confirmed high purchase intent. Validated reason: "${l.won_reason}".`
-            : `AI qualification validated strong buying interest: Urgent compliance requirement in ${l.industry || 'operations'}, verified budget authority, and immediate implementation timeline.`;
-        } else {
-          status = 'interested';
-          reason = `Active discussion ongoing. Key pain points identified: Seeking digital transformation and centralized sales automation.`;
-        }
-
-        let externalInfo = null;
-        if (ragSettings.enable_external_company_search) {
-          externalInfo = await this.searchCompanyExternal(company, l.industry);
-        }
-
-        if (externalInfo?.summary) {
-          reason += ` External Market Profile: ${externalInfo.summary.slice(0, 150)}...`;
-        }
-
-        // Store into ai_lead_intelligence
-        await pool.query(`
-          INSERT INTO ai_lead_intelligence (
-            lead_id, qualification_status, interest_reason, company_external_summary, last_analyzed_at
-          ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-          ON DUPLICATE KEY UPDATE
-            qualification_status = VALUES(qualification_status),
-            interest_reason = VALUES(interest_reason),
-            company_external_summary = VALUES(company_external_summary),
-            last_analyzed_at = CURRENT_TIMESTAMP
-        `, [l.id, status, reason, externalInfo?.summary || null]);
-
-        qualifiedLeads.push({
-          id: l.id,
-          title: l.title,
-          company,
-          status,
-          contact_name: l.contact_name,
-          contact_phone: l.contact_phone,
-          stage: l.stage_name,
-          reason,
-          external_source: externalInfo?.source || null,
-        });
-      }
-
-      const interestedList = qualifiedLeads.filter((q) => q.status === 'interested');
-      const notInterestedList = qualifiedLeads.filter((q) => q.status === 'not_interested');
-
-      const markdownResponse = `### 🎯 Lead Qualification & Validation Analysis (Interested vs Not Interested)\n\n` +
-        `Every lead validated by AI voice calls and CRM touchpoints is rigorously categorized with detailed justification based on **CRM interaction logs** and **Company Background Data**:\n\n` +
-        `#### ✅ Interested Leads (Validated Qualification)\n` +
-        interestedList.slice(0, 6).map((item, idx) =>
-          `**${idx + 1}. [${item.title}](/leads/${item.id}) — ${item.company}**\n` +
-          `- **Status:** \`VALIDATED - INTERESTED\` | **Stage:** ${item.stage}\n` +
-          `- **Why Interested:** ${item.reason}\n`
-        ).join('\n') +
-        `\n\n#### ❌ Not Interested Leads (Disqualification Reason)\n` +
-        (notInterestedList.length > 0 ? notInterestedList.slice(0, 6).map((item, idx) =>
-          `**${idx + 1}. [${item.title}](/leads/${item.id}) — ${item.company}**\n` +
-          `- **Status:** \`DISQUALIFIED - NOT INTERESTED\`\n` +
-          `- **Why Not Interested:** ${item.reason}\n`
-        ).join('\n') : `*No leads currently categorized as Not Interested in active pipeline view.*\n`) +
-        `\n\n> 🔍 *Both interested and not-interested reasons are logged permanently on the lead record for sales audits.*`;
-
-      await this.saveCopilotMessage(user?.id || 1, 'user', 'qualification_reasoning', prompt || 'Why leads went interested or not interested');
-      await this.saveCopilotMessage(user?.id || 1, 'assistant', 'qualification_reasoning', markdownResponse, qualifiedLeads.map((q) => q.id), qualifiedLeads);
-
-      return {
-        query_type: 'qualification_reasoning',
-        message: markdownResponse,
-        cards: qualifiedLeads,
-        grounded_source: 'CRM Call Logs, Lost/Won Explanations & Web Search',
-      };
-    }
-
-    // =========================================================================
-    // INTENT 4: CUSTOM GROUNDED CHAT QUERY
-    // =========================================================================
-    const userPrompt = prompt.trim();
-
-    // Check if an external LLM gateway has an API key configured
-    const [gwRows] = await pool.query('SELECT * FROM ai_gateway_settings ORDER BY id ASC LIMIT 1');
-    const gateway = gwRows?.[0] || null;
-    const hasLlmKey = !!(gateway && gateway.llm_api_key && gateway.llm_api_key.trim().length > 0);
-
-    // 1. Handle Greetings / Self-Identity queries gracefully
-    const isGreeting = /^(hi|hello|hey|hola|vanakkam|namaste|good\s*(morning|afternoon|evening)|who\s*are\s*you|who\s*is\s*answering|help)\b/i.test(userPrompt);
-    if (isGreeting) {
-      let welcomeMsg = `### 👋 Hello! I am your SalesCRM Copilot\n\n` +
-        `I am your intelligent sales assistant, designed to help you analyze your CRM pipeline.\n\n`;
-
-      if (hasLlmKey) {
-        welcomeMsg += `🟢 **Active AI Provider:** \`${gateway.llm_provider}\` (Model: \`${gateway.llm_model}\`)\n\n`;
-      } else {
-        welcomeMsg += `⚠️ **AI Gateway Notice:** No external AI model API key (such as Google Gemini, DeepSeek, or OpenAI) is configured yet in **[AI Settings](/settings/ai)**.\n\n` +
-          `Right now, I am operating using the **Local CRM Database Engine** running directly on your CRM server. I search and evaluate your database records strictly from your MySQL/MariaDB database.\n\n`;
-      }
-
-      welcomeMsg += `**You can ask me to:**\n` +
-        `- 🔥 Identify hot leads with high closure probability\n` +
-        `- ⚡ Suggest the next engagement action and optimal timing\n` +
-        `- 🎯 Explain why leads were marked Interested or Not Interested\n` +
-        `- 🔍 Search specific companies, clients, or deal stages\n\n` +
-        `> 💡 *Click any of the quick action buttons above to get started instantly.*`;
-
-      await this.saveCopilotMessage(user?.id || 1, 'user', 'custom', userPrompt);
-      await this.saveCopilotMessage(user?.id || 1, 'assistant', 'custom', welcomeMsg, [], []);
-
-      return {
-        query_type: 'custom',
-        message: welcomeMsg,
-        cards: [],
-        grounded_source: hasLlmKey ? `${gateway.llm_provider} (Model & Gateway)` : 'Local CRM Database Engine (No external API key)',
-      };
-    }
-
-    // 2. Handle very short queries (less than 2 characters like "s" or "a")
-    if (userPrompt.length < 2) {
-      const shortMsg = `### 🔍 CRM Search Assistance\n\n` +
-        `Please type a specific search term (at least 2 characters) or click one of the quick options above.\n\n` +
-        (hasLlmKey 
-          ? `*AI Gateway: ${gateway.llm_provider} (${gateway.llm_model})*`
-          : `> ℹ️ *Note: No external AI is configured in AI Settings. Answering via Local CRM Database.*`
-        );
-
-      await this.saveCopilotMessage(user?.id || 1, 'user', 'custom', userPrompt);
-      await this.saveCopilotMessage(user?.id || 1, 'assistant', 'custom', shortMsg, [], []);
-
-      return {
-        query_type: 'custom',
-        message: shortMsg,
-        cards: [],
-        grounded_source: 'Local CRM Input Validation',
-      };
-    }
-
-    // 3. Search matching CRM leads
-    const matchingLeads = leads.filter((l) => {
-      const q = userPrompt.toLowerCase();
-      return (
-        (l.title && l.title.toLowerCase().includes(q)) ||
-        (l.company_name && l.company_name.toLowerCase().includes(q)) ||
-        (l.customer_company && l.customer_company.toLowerCase().includes(q)) ||
-        (l.contact_name && l.contact_name.toLowerCase().includes(q)) ||
-        (l.stage_name && l.stage_name.toLowerCase().includes(q)) ||
-        (l.industry && l.industry.toLowerCase().includes(q)) ||
-        (l.city && l.city.toLowerCase().includes(q))
-      );
-    });
-
-    const targetList = matchingLeads.length > 0 ? matchingLeads : leads.slice(0, 8);
-
-    // If an external LLM is configured with an API key, invoke the LLM with CRM context
-    let llmResponse = null;
-    if (hasLlmKey) {
-      const contextSummary = leads.slice(0, 15).map((l, i) =>
-        `${i + 1}. [Lead #${l.id}] ${l.title} | Company: ${l.company_name || l.customer_company || 'N/A'} | Stage: ${l.stage_name || 'New'} | Value: ${l.currency || '₹'}${Number(l.estimated_value || 0).toLocaleString()} | Contact: ${l.contact_name || 'N/A'} (${l.contact_phone || 'N/A'})`
-      ).join('\n');
-
-      const systemPrompt = `You are SalesCRM Copilot, an AI sales assistant. Answer the user question based strictly on this CRM application data:\n${contextSummary}\n\nGround your answer strictly in these CRM facts. Do not invent details not present in the data.`;
-      llmResponse = await this.callConfiguredLLM(gateway, systemPrompt, userPrompt);
-    }
-
-    let markdownResponse = '';
-    if (llmResponse) {
-      markdownResponse = `### 🤖 ${gateway.llm_provider.toUpperCase()} AI Answer\n\n` +
-        llmResponse +
-        `\n\n> 🌐 *Grounded via Model & Gateway (${gateway.llm_provider}: ${gateway.llm_model}) on active CRM records.*`;
-    } else {
-      markdownResponse = `### 🤖 SalesCRM Intelligence Answer\n\n` +
-        `Grounded strictly in your **CRM Application Database** (analyzing ${leads.length} leads across active pipelines):\n\n`;
-
-      if (matchingLeads.length > 0) {
-        markdownResponse += `Found **${matchingLeads.length} matching lead(s)** relevant to your inquiry:\n\n` +
-          matchingLeads.map((m, i) =>
-            `**${i + 1}. [${m.title}](/leads/${m.id})**\n` +
-            `- **Company:** ${m.company_name || m.customer_company || 'N/A'} | **Stage:** ${m.stage_name || 'New'}\n` +
-            `- **Value:** ${m.currency || '₹'}${Number(m.estimated_value || 0).toLocaleString()} | **Rep:** ${m.salesperson_name || 'Unassigned'}\n` +
-            `- **Contact:** ${m.contact_name || 'N/A'} (${m.contact_phone || 'No phone'})\n` +
-            (m.city ? `- **Location:** ${m.city}, ${m.state || 'India'}\n` : '')
-          ).join('\n');
-      } else {
-        markdownResponse += `Here is an overview of the top active leads currently in your CRM pipeline:\n\n` +
-          targetList.map((m, i) =>
-            `**${i + 1}. [${m.title}](/leads/${m.id}) — ${m.company_name || m.customer_company || 'Corporate'}** (${m.stage_name || 'New'})\n` +
-            `- **Deal Size:** ${m.currency || '₹'}${Number(m.estimated_value || 0).toLocaleString()} | **Owner:** ${m.salesperson_name || 'Unassigned'}\n`
-          ).join('\n');
-      }
-
-      markdownResponse += `\n\n> ℹ️ *Source: Local CRM Database Query Engine (No external LLM API key configured in AI Settings).*`;
-    }
-
-    await this.saveCopilotMessage(user?.id || 1, 'user', 'custom', userPrompt);
-    await this.saveCopilotMessage(user?.id || 1, 'assistant', 'custom', markdownResponse, targetList.map((t) => t.id), targetList);
+    await this.saveCopilotMessage(user?.id || 1, 'user', queryType || 'custom', prompt);
+    await this.saveCopilotMessage(user?.id || 1, 'assistant', queryType || 'custom', finalMessage, leads.slice(0, 5).map((l) => l.id), []);
 
     return {
-      query_type: 'custom',
-      message: markdownResponse,
-      cards: targetList,
-      grounded_source: hasLlmKey ? `${gateway.llm_provider} (Model & Gateway)` : 'Local CRM Database (Strict Grounding)',
+      query_type: queryType || 'custom',
+      message: finalMessage,
+      cards: leads.slice(0, 5).map((l) => ({
+        id: l.id,
+        title: l.title,
+        company: l.company_name || l.customer_company || 'Corporate Client',
+        contact_name: l.contact_name,
+        contact_phone: l.contact_phone,
+        estimated_value: l.estimated_value,
+        currency: l.currency || '₹',
+        stage: l.stage_name,
+      })),
+      grounded_source: `${gateway.llm_provider.toUpperCase()} (${gateway.llm_model})`,
     };
   }
 
@@ -711,6 +357,14 @@ class AiRagService {
         if (resp.ok) {
           const json = await resp.json();
           return json.candidates?.[0]?.content?.parts?.[0]?.text || null;
+        } else {
+          const errText = await resp.text();
+          let detail = `HTTP ${resp.status}`;
+          try {
+            const errObj = JSON.parse(errText);
+            detail = errObj.error?.message || errObj.message || detail;
+          } catch (_) {}
+          throw new Error(`Gemini API error: ${detail}`);
         }
       } else {
         // OpenAI / DeepSeek / Groq / Anthropic-proxy / Ollama
@@ -730,11 +384,19 @@ class AiRagService {
             temperature: Number(gateway.llm_temperature) || 0.7,
             max_tokens: Number(gateway.llm_max_tokens) || 2048,
           }),
-          signal: AbortSignal.timeout(15000),
+          signal: AbortSignal.timeout(20000),
         });
         if (resp.ok) {
           const json = await resp.json();
           return json.choices?.[0]?.message?.content || null;
+        } else {
+          const errText = await resp.text();
+          let detail = `HTTP ${resp.status}`;
+          try {
+            const errObj = JSON.parse(errText);
+            detail = errObj.error?.message || errObj.message || detail;
+          } catch (_) {}
+          throw new Error(`${provider.toUpperCase()} API error: ${detail}`);
         }
       }
     } catch (err) {
