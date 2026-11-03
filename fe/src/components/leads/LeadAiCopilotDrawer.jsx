@@ -28,15 +28,26 @@ import { useAuth } from '../../context/AuthContext';
 /**
  * Clean inline markdown parser that strips raw markdown characters like * and ###,
  * rendering styled headers, bold text, italics, bullet lists, blockquotes, and links.
+ * Also parses lead ID references and routes directly to them.
  */
-function renderInlineMarkdown(text, navigate) {
+function renderInlineMarkdown(text, navigate, onClose) {
   if (!text) return null;
 
-  // Tokenizer regex matching bold-links, links, bold, italic, code
-  const regex = /(\*\*\[([^\]]+)\]\(([^)]+)\)\*\*|\[([^\]]+)\]\(([^)]+)\)|\*\*([^*]+)\*\*|\*([^*]+)\*|`([^`]+)`)/g;
+  // Tokenizer regex matching bold-links, links, (/leads/ID), [Lead #ID], bold, italic, code
+  const regex = /(\*\*\[([^\]]+)\]\(([^)]+)\)\*\*|\[([^\]]+)\]\(([^)]+)\)|\(\[?(\/leads\/(\d+))\]?\)|\[(\/leads\/(\d+))\]|(\/leads\/(\d+))|\[Lead\s*#?(\d+)\]|\*\*([^*]+)\*\*|\*([^*]+)\*|`([^`]+)`)/gi;
   const elements = [];
   let lastIndex = 0;
   let match;
+
+  const handleLinkClick = (e, url) => {
+    e.stopPropagation();
+    if (url.startsWith('http')) {
+      window.open(url, '_blank');
+    } else {
+      if (onClose) onClose();
+      navigate(url);
+    }
+  };
 
   while ((match = regex.exec(text)) !== null) {
     if (match.index > lastIndex) {
@@ -51,11 +62,7 @@ function renderInlineMarkdown(text, navigate) {
         <button
           key={match.index}
           type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            if (url.startsWith('http')) window.open(url, '_blank');
-            else navigate(url);
-          }}
+          onClick={(e) => handleLinkClick(e, url)}
           className="font-bold text-blue-600 hover:text-blue-800 underline cursor-pointer"
         >
           {linkText}
@@ -69,35 +76,59 @@ function renderInlineMarkdown(text, navigate) {
         <button
           key={match.index}
           type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            if (url.startsWith('http')) window.open(url, '_blank');
-            else navigate(url);
-          }}
+          onClick={(e) => handleLinkClick(e, url)}
           className="text-blue-600 hover:text-blue-800 underline font-medium cursor-pointer"
         >
           {linkText}
         </button>
       );
-    } else if (match[6]) {
+    } else if (match[7] || match[9] || match[11]) {
+      // (/leads/4608) or [/leads/4608] or /leads/4608
+      const leadId = match[7] || match[9] || match[11];
+      elements.push(
+        <button
+          key={match.index}
+          type="button"
+          onClick={(e) => handleLinkClick(e, `/leads/${leadId}`)}
+          className="inline-flex items-center gap-1 font-semibold text-blue-600 hover:text-blue-800 underline cursor-pointer mx-0.5"
+          title={`Open Lead #${leadId}`}
+        >
+          [View Lead #{leadId}]
+        </button>
+      );
+    } else if (match[12]) {
+      // [Lead #4608]
+      const leadId = match[12];
+      elements.push(
+        <button
+          key={match.index}
+          type="button"
+          onClick={(e) => handleLinkClick(e, `/leads/${leadId}`)}
+          className="inline-flex items-center gap-1 font-semibold text-blue-600 hover:text-blue-800 underline cursor-pointer mx-0.5"
+          title={`Open Lead #${leadId}`}
+        >
+          Lead #{leadId}
+        </button>
+      );
+    } else if (match[13]) {
       // **bold**
       elements.push(
         <strong key={match.index} className="font-semibold text-gray-900">
-          {match[6]}
+          {match[13]}
         </strong>
       );
-    } else if (match[7]) {
+    } else if (match[14]) {
       // *italic*
       elements.push(
         <em key={match.index} className="italic text-gray-700">
-          {match[7]}
+          {match[14]}
         </em>
       );
-    } else if (match[8]) {
+    } else if (match[15]) {
       // `code`
       elements.push(
         <code key={match.index} className="px-1.5 py-0.5 rounded bg-gray-100 text-blue-700 font-mono text-[11px] font-medium">
-          {match[8]}
+          {match[15]}
         </code>
       );
     }
@@ -112,7 +143,7 @@ function renderInlineMarkdown(text, navigate) {
   return elements.length > 0 ? elements : text;
 }
 
-function MarkdownRenderer({ message, isUser, navigate }) {
+function MarkdownRenderer({ message, isUser, navigate, onClose }) {
   if (!message) return null;
   if (isUser) {
     return <div className="whitespace-pre-wrap">{message}</div>;
@@ -133,32 +164,33 @@ function MarkdownRenderer({ message, isUser, navigate }) {
     if (trimmed.startsWith('### ')) {
       rendered.push(
         <h3 key={i} className="text-sm font-bold text-gray-900 mt-2.5 mb-1 flex items-center gap-1.5 border-b border-gray-100 pb-1">
-          {renderInlineMarkdown(trimmed.substring(4), navigate)}
+          {renderInlineMarkdown(trimmed.substring(4), navigate, onClose)}
         </h3>
       );
     } else if (trimmed.startsWith('#### ')) {
       rendered.push(
         <h4 key={i} className="text-xs font-bold text-gray-800 mt-2 mb-1">
-          {renderInlineMarkdown(trimmed.substring(5), navigate)}
+          {renderInlineMarkdown(trimmed.substring(5), navigate, onClose)}
         </h4>
       );
     } else if (trimmed.startsWith('> ')) {
       rendered.push(
         <div key={i} className="my-2 p-2.5 bg-blue-50/80 border-l-3 border-blue-500 rounded-r-lg text-xs text-blue-950 leading-relaxed shadow-xs">
-          {renderInlineMarkdown(trimmed.substring(2), navigate)}
+          {renderInlineMarkdown(trimmed.substring(2), navigate, onClose)}
         </div>
       );
-    } else if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+    } else if (trimmed.startsWith('- ') || trimmed.startsWith('* ') || trimmed.startsWith('• ')) {
+      const bulletContent = trimmed.startsWith('• ') ? trimmed.substring(2) : trimmed.substring(2);
       rendered.push(
         <div key={i} className="flex items-start gap-2 my-1 text-xs text-gray-700 pl-1 leading-relaxed">
           <span className="text-blue-500 font-bold shrink-0 mt-0.5">•</span>
-          <span className="flex-1">{renderInlineMarkdown(trimmed.substring(2), navigate)}</span>
+          <span className="flex-1">{renderInlineMarkdown(bulletContent, navigate, onClose)}</span>
         </div>
       );
     } else {
       rendered.push(
         <p key={i} className="text-xs text-gray-700 leading-relaxed my-0.5">
-          {renderInlineMarkdown(line, navigate)}
+          {renderInlineMarkdown(line, navigate, onClose)}
         </p>
       );
     }
@@ -343,7 +375,7 @@ export default function LeadAiCopilotDrawer({ isOpen, onClose }) {
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
-                <h3 className="text-sm font-bold text-gray-900">Olgpt ai</h3>
+                <h3 className="text-sm font-bold text-gray-900">Olgpt Ai</h3>
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
                   <ShieldCheck size={11} />
                   {isSalesManager ? 'Domain Scoped' : isAdmin ? 'Admin Grounding' : 'My Leads'}
@@ -351,8 +383,8 @@ export default function LeadAiCopilotDrawer({ isOpen, onClose }) {
               </div>
               <p className="text-[11px] text-gray-500">
                 {isSalesManager
-                  ? 'Strictly scoped to your assigned domain leads and team'
-                  : 'Answering strictly from CRM Application Data'}
+                  ? 'Ai Aassistant'
+                  : 'Ai Aassistant'}
               </p>
             </div>
           </div>
@@ -599,54 +631,8 @@ export default function LeadAiCopilotDrawer({ isOpen, onClose }) {
                         : 'bg-white text-gray-800 border border-gray-200 rounded-bl-xs shadow-xs'
                     }`}
                   >
-                    <MarkdownRenderer message={m.message} isUser={isUser} navigate={navigate} />
+                    <MarkdownRenderer message={m.message} isUser={isUser} navigate={navigate} onClose={onClose} />
                   </div>
-
-                  {/* Render Lead Cards inside AI Responses */}
-                  {!isUser && cards && cards.length > 0 && (
-                    <div className="space-y-2 pt-1">
-                      <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
-                        <Building2 size={12} className="text-gray-400" />
-                        <span>CRM Lead Records ({cards.length})</span>
-                      </div>
-                      <div className="grid grid-cols-1 gap-2">
-                        {cards.slice(0, 5).map((card) => (
-                          <div
-                            key={card.id}
-                            onClick={() => {
-                              navigate(`/leads/${card.id}`);
-                              onClose();
-                            }}
-                            className="p-3 bg-white border border-gray-200 hover:border-blue-300 rounded-xl transition shadow-2xs hover:shadow-xs cursor-pointer group"
-                          >
-                            <div className="flex items-start justify-between gap-2">
-                              <div>
-                                <div className="text-xs font-bold text-gray-900 group-hover:text-blue-600 transition-colors flex items-center gap-1.5">
-                                  {card.title}
-                                  <ChevronRight size={13} className="text-gray-400 group-hover:translate-x-0.5 transition-transform" />
-                                </div>
-                                <div className="text-[11px] text-gray-500 font-medium mt-0.5 flex items-center gap-1.5">
-                                  <Building2 size={12} className="text-gray-400" />
-                                  <span>{card.company || 'Corporate Client'}</span>
-                                  {card.domain_name && (
-                                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-gray-100 text-gray-600">
-                                      {card.domain_name}
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-
-                              {card.score && (
-                                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-orange-50 text-orange-700 border border-orange-200">
-                                  {card.score} pts
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
                 </div>
 
                 {isUser && (

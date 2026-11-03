@@ -885,10 +885,10 @@ export default function LeadsPage() {
             type="button"
             onClick={() => setAiCopilotOpen(true)}
             className="inline-flex items-center gap-2 px-3.5 py-2 border border-gray-300 text-gray-700 bg-transparent hover:bg-gray-50 rounded-lg shadow-xs transition font-medium text-sm"
-            title="Open Olgpt ai"
+            title="Open Olgpt Ai"
           >
             <Sparkles size={15} className="text-gray-600" />
-            Olgpt ai
+            Olgpt Ai
           </button>
 
           <button
@@ -1634,10 +1634,10 @@ export default function LeadsPage() {
         type="button"
         onClick={() => setAiCopilotOpen((prev) => !prev)}
         className="fixed bottom-6 right-6 z-40 flex items-center gap-2 px-3.5 py-2.5 bg-white border border-gray-300 text-gray-800 font-medium text-sm rounded-full shadow-md hover:bg-gray-50 hover:shadow-lg transition-all cursor-pointer"
-        title="Open Olgpt ai"
+        title="Open Olgpt Ai"
       >
         <Sparkles size={16} className="text-gray-600" />
-        <span>Olgpt ai</span>
+        <span>Olgpt Ai</span>
         <span className="w-2 h-2 rounded-full bg-emerald-500 ml-0.5" />
       </button>
 
