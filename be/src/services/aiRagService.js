@@ -222,21 +222,62 @@ class AiRagService {
     const idMatch = prompt.match(/(?:lead|id|#)\s*#?\s*(\d{1,8})/i) || prompt.match(/\b(\d{4,8})\b/);
     if (idMatch) id = parseInt(idMatch[1], 10);
 
+    // 1. Quoted phrase extraction (e.g., 'Windows Pro License' or "Greenbotz")
+    const quoteMatch = prompt.match(/["']([^"']{2,})["']/);
+    const quotedPhrase = quoteMatch ? quoteMatch[1].trim() : null;
+
+    // Comprehensive stop words list
+    const STOP_WORDS = new Set([
+      'a', 'about', 'above', 'account', 'after', 'again', 'all', 'am', 'an', 'and', 'any', 'are', 'as', 'at',
+      'be', 'because', 'been', 'before', 'being', 'below', 'between', 'both', 'but', 'by',
+      'call', 'called', 'can', 'check', 'client', 'clients', 'company', 'could', 'customer', 'customers',
+      'did', 'do', 'does', 'doing', 'down', 'each', 'few', 'find',
+      'for', 'from', 'further', 'get', 'give', 'had', 'has', 'have', 'having', 'he', 'her',
+      'here', 'hers', 'herself', 'him', 'himself', 'his', 'how', 'i', 'if', 'in', 'into',
+      'is', 'it', 'its', 'itself', 'just', 'lead', 'leads', 'look', 'looking', 'lookup',
+      'me', 'more', 'most', 'my', 'myself', 'named', 'name', 'names', 'need', 'no', 'nor',
+      'not', 'now', 'of', 'off', 'on', 'once', 'only', 'or', 'other', 'our', 'ours', 'out',
+      'over', 'own', 'please', 'same', 'see', 'show', 'showing', 'so', 'some', 'status',
+      'such', 'tell', 'than', 'that', 'the', 'their', 'theirs', 'them', 'then', 'there',
+      'these', 'they', 'this', 'those', 'through', 'titled', 'title', 'to', 'too', 'under',
+      'until', 'up', 'very', 'was', 'we', 'were', 'what', 'when', 'where', 'which', 'while',
+      'who', 'whom', 'why', 'with', 'would', 'you', 'your', 'yours'
+    ]);
+
+    // 2. Progressive cleanup of natural language questions and commands
     let cleaned = prompt
-      .replace(/(?:can you\s+)?(?:please\s+)?(?:give me|show me|tell me|get|find|look up|search for|what is|who is|i want)\s+/gi, '')
-      .replace(/(?:full\s+)?details\s+(?:about|of|on)\s+/gi, '')
-      .replace(/(?:the\s+|this\s+)?lead\s*(?:called|named|titled)?\s*/gi, '')
-      .replace(/(?:information|info|status|update)\s+(?:about|of|on)\s+/gi, '')
-      .replace(/[?!.,;:]/g, ' ')
+      .replace(/^(?:hey|hello|hi)\s*(?:olgpt|ai|assistant)?\s*[,!.]?\s*/i, '')
+      .replace(/^(?:can\s+you\s+)?(?:please\s+)?(?:check\s+if\s+there\s+is|check\s+whether\s+there\s+is|check\s+for|search\s+for|look\s*up|find|give|tell|show|see|get)\s+(?:me\s+)?/i, '')
+      .replace(/^is\s+(?:there\s+)?any\s+lead\s+(?:there\s+)?(?:named|called|titled|for|with\s+title)?\s*/i, '')
+      .replace(/^is\s+any\s+lead\s+(?:there\s+)?(?:named|called|titled|for|with\s+title)?\s*/i, '')
+      .replace(/^is\s+there\s+(?:a\s+|any\s+)?lead\s+(?:named|called|titled|for|with\s+title)?\s*/i, '')
+      .replace(/^are\s+(?:there\s+)?any\s+leads?\s+(?:there\s+)?(?:named|called|titled|for)?\s*/i, '')
+      .replace(/^do\s+we\s+have\s+(?:a\s+|any\s+)?leads?\s+(?:named|called|titled|for)?\s*/i, '')
+      .replace(/^i\s+want\s+/i, '')
+      .replace(/^what\s+is\s+(?:the\s+)?/i, '')
+      .replace(/^(?:full\s+)?(?:details?|info|information|status|update)\s+(?:about|of|on|for)?\s*/i, '')
+      .replace(/^(?:the\s+|this\s+|that\s+|any\s+)?leads?\s*(?:named|called|titled|for|with\s+name|with\s+title)?\s*/i, '')
+      .replace(/^(?:customer|client|account|company)\s+/i, '')
+      .replace(/\s+leads?$/i, '')
+      .replace(/[?!.,;:"'()[\]{}]/g, ' ')
+      .replace(/\s+/g, ' ')
       .trim();
 
-    const stopWords = new Set(['about', 'this', 'that', 'with', 'from', 'have', 'what', 'which', 'who', 'where', 'when', 'some', 'any', 'all', 'the', 'and', 'for', 'in', 'at', 'on', 'by', 'our']);
-    const tokens = cleaned
+    // 3. Extract meaningful keyword tokens by filtering STOP_WORDS
+    const rawTokens = (cleaned || prompt)
+      .replace(/[?!.,;:"'()[\]{}]/g, ' ')
       .split(/\s+/)
       .map((t) => t.trim())
-      .filter((t) => t.length >= 2 && !stopWords.has(t.toLowerCase()));
+      .filter((t) => t.length >= 2);
 
-    return { id, phrase: cleaned, tokens };
+    const tokens = rawTokens.filter((t) => !STOP_WORDS.has(t.toLowerCase()));
+    const finalTokens = tokens.length > 0 ? tokens : rawTokens;
+
+    // Prefer quoted phrase, then clean tokens joined, then cleaned text
+    const tokenPhrase = tokens.length > 0 ? tokens.join(' ') : cleaned;
+    const finalPhrase = (quotedPhrase || tokenPhrase || '').trim();
+
+    return { id, phrase: finalPhrase, tokens: finalTokens };
   }
 
   /**
@@ -286,13 +327,13 @@ class AiRagService {
         searchParams.push(likePhrase, likePhrase, likePhrase, likePhrase, likePhrase);
       }
 
-      if (tokens.length >= 2) {
-        const tokenTitleLikes = tokens.map(() => 'l.title LIKE ?').join(' AND ');
-        const tokenCompLikes = tokens.map(() => 'l.company_name LIKE ?').join(' AND ');
-        searchConditions.push(`(${tokenTitleLikes})`);
-        searchParams.push(...tokens.map((t) => `%${t}%`));
-        searchConditions.push(`(${tokenCompLikes})`);
-        searchParams.push(...tokens.map((t) => `%${t}%`));
+      if (tokens.length >= 1) {
+        const tokenConditions = tokens.map(() => '(l.title LIKE ? OR l.company_name LIKE ? OR c.company_name LIKE ? OR u.name LIKE ?)');
+        searchConditions.push(`(${tokenConditions.join(' AND ')})`);
+        for (const t of tokens) {
+          const tLike = `%${t}%`;
+          searchParams.push(tLike, tLike, tLike, tLike);
+        }
       }
 
       if (searchConditions.length > 0) {
