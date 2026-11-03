@@ -366,4 +366,13 @@ export const aiCopilotAPI = {
   clearHistory: (params) => api.delete('/ai/rag/history', { params }),
 };
 
+export const aiTokenAPI = {
+  getSummary: () => api.get('/ai/analytics/summary'),
+  getUserQuotas: (params) => api.get('/ai/analytics/users', { params }),
+  updateUserQuota: (userId, data) => api.put(`/ai/analytics/users/${userId}/quota`, data),
+  bulkUpdateQuotas: (data) => api.post('/ai/analytics/users/bulk-quota', data),
+  updateSettings: (data) => api.put('/ai/analytics/settings', data),
+  resetUsage: (data) => api.post('/ai/analytics/reset-usage', data),
+};
+
 export default api;

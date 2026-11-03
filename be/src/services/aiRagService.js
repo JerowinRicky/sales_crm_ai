@@ -1,5 +1,6 @@
 const { pool } = require('../config/database');
 const aiGatewayService = require('./aiGatewayService');
+const aiTokenService = require('./aiTokenService');
 
 class AiRagService {
   /**
@@ -584,6 +585,20 @@ class AiRagService {
       };
     }
 
+    // TOKEN QUOTA & ACCESS SUSPENSION CHECK
+    const quotaCheck = await aiTokenService.checkUserQuota(userId);
+    if (!quotaCheck.allowed) {
+      await this.saveCopilotMessage(userId, activeConvId, 'user', queryType || 'custom', prompt);
+      await this.saveCopilotMessage(userId, activeConvId, 'assistant', queryType || 'custom', quotaCheck.message, [], []);
+      return {
+        conversation_id: activeConvId,
+        query_type: queryType || 'custom',
+        message: quotaCheck.message,
+        cards: [],
+        grounded_source: quotaCheck.reason === 'blocked' ? 'Access Suspended' : 'Quota Exceeded',
+      };
+    }
+
     const ragSettings = await this.getRagSettings();
     // Retrieve CRM records strictly scoped to this user's domain permissions, matching search terms if query is specific
     const crmData = await this.getCRMApplicationData(ragSettings.max_context_leads || 35, effectiveUser, prompt);
@@ -693,8 +708,13 @@ ${crmContextText}`;
     }
 
     let aiAnswer = null;
+    let tokenUsage = null;
     try {
-      aiAnswer = await this.callConfiguredLLM(gateway, systemPrompt, userPromptToSend);
+      const llmResult = await this.callConfiguredLLM(gateway, systemPrompt, userPromptToSend);
+      if (llmResult) {
+        aiAnswer = typeof llmResult === 'string' ? llmResult : llmResult.text;
+        tokenUsage = llmResult.usage || null;
+      }
     } catch (llmErr) {
       aiAnswer = `AI Gateway error: ${llmErr.message || 'Please check API key.'}`;
     }
@@ -711,6 +731,23 @@ ${crmContextText}`;
 
     await this.saveCopilotMessage(userId, activeConvId, 'user', queryType || 'custom', prompt);
     await this.saveCopilotMessage(userId, activeConvId, 'assistant', queryType || 'custom', finalMessage, leads.slice(0, 5).map((l) => l.id), []);
+
+    // Record token usage for analytics & quotas
+    try {
+      await aiTokenService.recordUsage({
+        userId,
+        conversationId: activeConvId,
+        provider: gateway.llm_provider || 'gemini',
+        model: gateway.llm_model || 'gemini-1.5-pro',
+        promptText: `${systemPrompt}\n\n${userPromptToSend}`,
+        completionText: finalMessage,
+        usage: tokenUsage,
+        queryType: queryType || 'custom',
+        status: finalMessage.startsWith('AI Gateway error:') ? 'error' : 'success',
+      });
+    } catch (recordErr) {
+      console.warn('Failed to record AI token usage:', recordErr.message);
+    }
 
     // Update conversation timestamp
     await pool.query('UPDATE ai_copilot_conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?', [activeConvId]);
@@ -758,7 +795,19 @@ ${crmContextText}`;
         });
         if (resp.ok) {
           const json = await resp.json();
-          return json.candidates?.[0]?.content?.parts?.[0]?.text || null;
+          const candidateText = json.candidates?.[0]?.content?.parts?.[0]?.text || null;
+          const meta = json.usageMetadata || {};
+          const pTokens = meta.promptTokenCount || Math.ceil((systemPrompt.length + userMessage.length) / 4);
+          const cTokens = meta.candidatesTokenCount || Math.ceil((candidateText || '').length / 4);
+          const tTokens = meta.totalTokenCount || (pTokens + cTokens);
+          return {
+            text: candidateText,
+            usage: {
+              prompt_tokens: pTokens,
+              completion_tokens: cTokens,
+              total_tokens: tTokens,
+            },
+          };
         } else {
           const errText = await resp.text();
           let detail = `HTTP ${resp.status}`;
@@ -790,7 +839,19 @@ ${crmContextText}`;
         });
         if (resp.ok) {
           const json = await resp.json();
-          return json.choices?.[0]?.message?.content || null;
+          const choiceText = json.choices?.[0]?.message?.content || null;
+          const rawUsage = json.usage || {};
+          const pTokens = rawUsage.prompt_tokens || Math.ceil((systemPrompt.length + userMessage.length) / 4);
+          const cTokens = rawUsage.completion_tokens || Math.ceil((choiceText || '').length / 4);
+          const tTokens = rawUsage.total_tokens || (pTokens + cTokens);
+          return {
+            text: choiceText,
+            usage: {
+              prompt_tokens: pTokens,
+              completion_tokens: cTokens,
+              total_tokens: tTokens,
+            },
+          };
         } else {
           const errText = await resp.text();
           let detail = `HTTP ${resp.status}`;

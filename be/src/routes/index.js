@@ -345,4 +345,13 @@ router.post('/ai/rag/query', authenticate, aiRagController.queryCopilot);
 router.get('/ai/rag/history', authenticate, aiRagController.getChatHistory);
 router.delete('/ai/rag/history', authenticate, aiRagController.clearChatHistory);
 
+// AI Token Analytics & User Quotas (Admin & Manager)
+const aiTokenController = require('../controllers/aiTokenController');
+router.get('/ai/analytics/summary', authenticate, requireManager, aiTokenController.getSummary);
+router.get('/ai/analytics/users', authenticate, requireManager, aiTokenController.getUserQuotas);
+router.put('/ai/analytics/users/:id/quota', authenticate, requireAdmin, aiTokenController.updateUserQuota);
+router.post('/ai/analytics/users/bulk-quota', authenticate, requireAdmin, aiTokenController.bulkUpdateQuotas);
+router.put('/ai/analytics/settings', authenticate, requireAdmin, aiTokenController.updateSettings);
+router.post('/ai/analytics/reset-usage', authenticate, requireAdmin, aiTokenController.resetUsage);
+
 module.exports = router;

@@ -34,9 +34,11 @@ import {
   ChevronDown,
   ChevronUp,
   X,
+  BarChart3,
 } from "lucide-react";
 import { aiGatewayAPI, aiCopilotAPI } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
+import AiTokenAnalyticsTab from "../../components/admin/AiTokenAnalyticsTab";
 
 // Presets for LLM Providers
 const LLM_PRESETS = [
@@ -463,6 +465,7 @@ export default function AiSettingsPage() {
       <div className="flex flex-wrap gap-2 mb-6 border-b border-gray-200 pb-3">
         {[
           ["engine", Cpu, "Model & Gateway"],
+          ["analytics", BarChart3, "Token Analytics & Quotas"],
           ["rag", Layers, "RAG & Company Intelligence"],
           ["overview", Activity, "Overview & Status"],
           ["scoring", Flame, "Hot Lead & Scoring"],
@@ -1169,6 +1172,11 @@ export default function AiSettingsPage() {
           </div>
         </div>
       )}
+
+      {/* =========================================================
+          TAB: TOKEN ANALYTICS & USER QUOTA CONTROLS
+         ========================================================= */}
+      {tab === "analytics" && <AiTokenAnalyticsTab />}
 
       {/* =========================================================
           TAB: RAG & APPLICATION GROUNDING ENGINE
