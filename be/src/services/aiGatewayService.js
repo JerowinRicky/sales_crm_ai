@@ -351,19 +351,19 @@ class AiGatewayService {
   async testConnection({ type, config }) {
     const startTime = Date.now();
 
-    function validateUrl(rawUrl, label = 'URL') {
+    function validateUrl(rawUrl) {
       if (!rawUrl || typeof rawUrl !== 'string' || !rawUrl.trim()) {
-        throw new Error(`Please check the ${label}. It cannot be empty.`);
+        throw new Error('Please check the URL.');
       }
       const trimmed = rawUrl.trim();
       let parsed;
       try {
         parsed = new URL(trimmed);
       } catch (_) {
-        throw new Error(`Please check the ${label}. Enter a valid address starting with https:// or http://`);
+        throw new Error('Please check the URL.');
       }
       if (!['http:', 'https:'].includes(parsed.protocol)) {
-        throw new Error(`Please check the ${label}. The address must start with https:// or http://`);
+        throw new Error('Please check the URL.');
       }
       return parsed.toString().replace(/\/+$/, '');
     }
