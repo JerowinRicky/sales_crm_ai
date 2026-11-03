@@ -326,11 +326,11 @@ router.put('/mail/templates/:key', authenticate, requireAdmin, mailController.up
 router.post('/mail/templates/:key/reset', authenticate, requireAdmin, mailController.resetTemplate);
 router.post('/mail/templates/:key/preview', authenticate, requireAdmin, mailController.previewTemplate);
 
-// AI Engine & Gateway Settings (Admin only, with history & rollback)
+// AI Engine & Gateway Settings (with history & rollback)
 const aiGatewayController = require('../controllers/aiGatewayController');
-router.get('/ai/gateway', authenticate, requireAdmin, aiGatewayController.getSettings);
+router.get('/ai/gateway', authenticate, requireManager, aiGatewayController.getSettings);
 router.put('/ai/gateway', authenticate, requireAdmin, aiGatewayController.updateSettings);
-router.get('/ai/gateway/history', authenticate, requireAdmin, aiGatewayController.getHistory);
+router.get('/ai/gateway/history', authenticate, requireManager, aiGatewayController.getHistory);
 router.post('/ai/gateway/rollback/:version', authenticate, requireAdmin, aiGatewayController.rollback);
 router.post('/ai/gateway/test-connection', authenticate, requireAdmin, aiGatewayController.testConnection);
 
