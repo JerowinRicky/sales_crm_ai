@@ -175,34 +175,167 @@ class AiRagService {
   }
 
   /**
-   * Retrieve Application Grounding Context from CRM Database with strict domain RBAC
+   * Extract search candidate terms and lead IDs from user prompt
    */
-  async getCRMApplicationData(limit = 35, user = null) {
+  extractSearchTerms(prompt) {
+    if (!prompt || typeof prompt !== 'string') return { id: null, phrase: '', tokens: [] };
+    let id = null;
+    const idMatch = prompt.match(/(?:lead|id|#)\s*#?\s*(\d{1,8})/i) || prompt.match(/\b(\d{4,8})\b/);
+    if (idMatch) id = parseInt(idMatch[1], 10);
+
+    let cleaned = prompt
+      .replace(/(?:can you\s+)?(?:please\s+)?(?:give me|show me|tell me|get|find|look up|search for|what is|who is|i want)\s+/gi, '')
+      .replace(/(?:full\s+)?details\s+(?:about|of|on)\s+/gi, '')
+      .replace(/(?:the\s+|this\s+)?lead\s*(?:called|named|titled)?\s*/gi, '')
+      .replace(/(?:information|info|status|update)\s+(?:about|of|on)\s+/gi, '')
+      .replace(/[?!.,;:]/g, ' ')
+      .trim();
+
+    const stopWords = new Set(['about', 'this', 'that', 'with', 'from', 'have', 'what', 'which', 'who', 'where', 'when', 'some', 'any', 'all', 'the', 'and', 'for', 'in', 'at', 'on', 'by', 'our']);
+    const tokens = cleaned
+      .split(/\s+/)
+      .map((t) => t.trim())
+      .filter((t) => t.length >= 2 && !stopWords.has(t.toLowerCase()));
+
+    return { id, phrase: cleaned, tokens };
+  }
+
+  /**
+   * Retrieve Application Grounding Context from CRM Database with strict domain RBAC
+   * Performs dynamic keyword/ID search across all CRM leads when userPrompt is provided.
+   */
+  async getCRMApplicationData(limit = 35, user = null, userPrompt = '') {
     const { isAdmin, isManager, isSalesperson, domainIds } = await this.getUserDomainScope(user);
 
-    let whereSql = 'WHERE l.is_active = 1';
-    const params = [];
+    let whereBaseSql = 'WHERE l.is_active = 1';
+    const rbacParams = [];
 
     // RBAC: Manager can only see their domain leads and team members
     if (isManager) {
       if (domainIds.length > 0) {
-        whereSql += ` AND l.domain_id IN (${domainIds.map(() => '?').join(',')})`;
-        params.push(...domainIds);
+        whereBaseSql += ` AND l.domain_id IN (${domainIds.map(() => '?').join(',')})`;
+        rbacParams.push(...domainIds);
       } else {
         // If manager has no domain assigned, limit strictly to their own leads
-        whereSql += ' AND (l.assigned_to = ? OR l.created_by = ?)';
-        params.push(user.id, user.id);
+        whereBaseSql += ' AND (l.assigned_to = ? OR l.created_by = ?)';
+        rbacParams.push(user.id, user.id);
       }
     } else if (isSalesperson && user) {
       // Salesperson can only see their assigned leads
-      whereSql += ' AND l.assigned_to = ?';
-      params.push(user.id);
+      whereBaseSql += ' AND l.assigned_to = ?';
+      rbacParams.push(user.id);
     }
 
-    params.push(Number(limit));
+    const targetedLeads = [];
+    const targetedIds = new Set();
 
-    // 1. Query Leads with Stages, Rep info, and Domain info
-    const [leads] = await pool.query(`
+    // 1. If userPrompt is provided, search across the entire leads table
+    if (userPrompt && typeof userPrompt === 'string') {
+      const { id: searchId, phrase: searchPhrase, tokens } = this.extractSearchTerms(userPrompt);
+
+      const searchConditions = [];
+      const searchParams = [];
+
+      if (searchId) {
+        searchConditions.push('l.id = ?');
+        searchParams.push(searchId);
+      }
+
+      if (searchPhrase && searchPhrase.length >= 2) {
+        const likePhrase = `%${searchPhrase}%`;
+        searchConditions.push('l.title LIKE ?', 'l.company_name LIKE ?', 'c.company_name LIKE ?', 'l.contact_name LIKE ?', 'u.name LIKE ?');
+        searchParams.push(likePhrase, likePhrase, likePhrase, likePhrase, likePhrase);
+      }
+
+      if (tokens.length >= 2) {
+        const tokenTitleLikes = tokens.map(() => 'l.title LIKE ?').join(' AND ');
+        const tokenCompLikes = tokens.map(() => 'l.company_name LIKE ?').join(' AND ');
+        searchConditions.push(`(${tokenTitleLikes})`);
+        searchParams.push(...tokens.map((t) => `%${t}%`));
+        searchConditions.push(`(${tokenCompLikes})`);
+        searchParams.push(...tokens.map((t) => `%${t}%`));
+      }
+
+      if (searchConditions.length > 0) {
+        const targetedWhere = `${whereBaseSql} AND (${searchConditions.join(' OR ')})`;
+        const [foundTargeted] = await pool.query(`
+          SELECT
+            l.id,
+            l.title,
+            l.domain_id,
+            l.company_name,
+            l.contact_name,
+            l.contact_phone,
+            l.contact_email,
+            l.estimated_value,
+            l.currency,
+            l.probability,
+            l.source,
+            l.priority,
+            l.next_visit,
+            l.expected_close_date,
+            l.description,
+            l.won_reason,
+            l.lost_reason,
+            l.on_hold_reason,
+            l.created_at,
+            l.updated_at,
+            l.lead_type,
+            l.pipeline,
+            s.name AS stage_name,
+            s.is_won,
+            s.is_closed,
+            u.name AS salesperson_name,
+            u.email AS salesperson_email,
+            c.company_name AS customer_company,
+            c.industry,
+            c.city,
+            c.state,
+            d.name AS domain_name
+          FROM leads l
+          LEFT JOIN lead_stages s ON l.stage_id = s.id
+          LEFT JOIN users u ON l.assigned_to = u.id
+          LEFT JOIN customers c ON l.customer_id = c.id
+          LEFT JOIN domains d ON l.domain_id = d.id
+          ${targetedWhere}
+          ORDER BY
+            CASE
+              WHEN l.id = ? THEN 1
+              WHEN l.title = ? THEN 2
+              WHEN l.title LIKE ? THEN 3
+              WHEN l.company_name LIKE ? THEN 4
+              ELSE 5
+            END,
+            l.updated_at DESC
+          LIMIT 15
+        `, [
+          ...rbacParams,
+          ...searchParams,
+          searchId || 0,
+          searchPhrase || '',
+          searchPhrase ? `%${searchPhrase}%` : '',
+          searchPhrase ? `%${searchPhrase}%` : '',
+        ]);
+
+        for (const row of foundTargeted) {
+          row.isTargetedMatch = true;
+          targetedLeads.push(row);
+          targetedIds.add(row.id);
+        }
+      }
+    }
+
+    // 2. Query Recent Leads to ensure general pipeline context
+    const recentLimit = Math.max(10, Number(limit) - targetedLeads.length);
+    let recentWhere = whereBaseSql;
+    const recentParams = [...rbacParams];
+    if (targetedIds.size > 0) {
+      recentWhere += ` AND l.id NOT IN (${Array.from(targetedIds).map(() => '?').join(',')})`;
+      recentParams.push(...Array.from(targetedIds));
+    }
+    recentParams.push(recentLimit);
+
+    const [recentLeads] = await pool.query(`
       SELECT
         l.id,
         l.title,
@@ -224,6 +357,8 @@ class AiRagService {
         l.on_hold_reason,
         l.created_at,
         l.updated_at,
+        l.lead_type,
+        l.pipeline,
         s.name AS stage_name,
         s.is_won,
         s.is_closed,
@@ -239,14 +374,15 @@ class AiRagService {
       LEFT JOIN users u ON l.assigned_to = u.id
       LEFT JOIN customers c ON l.customer_id = c.id
       LEFT JOIN domains d ON l.domain_id = d.id
-      ${whereSql}
+      ${recentWhere}
       ORDER BY l.updated_at DESC
       LIMIT ?
-    `, params);
+    `, recentParams);
 
+    const leads = [...targetedLeads, ...recentLeads];
     const leadIds = leads.map((l) => l.id);
 
-    // 2. Query Recent Call logs related to these leads
+    // 3. Query Recent Call logs related to these leads
     let calls = [];
     if (leadIds.length > 0) {
       const [callRows] = await pool.query(`
@@ -268,7 +404,7 @@ class AiRagService {
       calls = callRows;
     }
 
-    // 3. Query Activities related to these leads
+    // 4. Query Activities related to these leads
     let activities = [];
     if (leadIds.length > 0) {
       const [actRows] = await pool.query(`
@@ -290,7 +426,7 @@ class AiRagService {
       activities = actRows;
     }
 
-    return { leads, calls, activities };
+    return { leads, targetedLeads, recentLeads, calls, activities };
   }
 
   /**
@@ -377,9 +513,9 @@ class AiRagService {
     }
 
     const ragSettings = await this.getRagSettings();
-    // Retrieve CRM records strictly scoped to this user's domain permissions
-    const crmData = await this.getCRMApplicationData(ragSettings.max_context_leads || 35, user);
-    const { leads, calls, activities } = crmData;
+    // Retrieve CRM records strictly scoped to this user's domain permissions, matching search terms if query is specific
+    const crmData = await this.getCRMApplicationData(ragSettings.max_context_leads || 35, user, prompt);
+    const { leads, targetedLeads, recentLeads, calls, activities } = crmData;
     const { isAdmin, isManager, domainNames } = await this.getUserDomainScope(user);
 
     // Build lead lookup map
@@ -395,14 +531,51 @@ class AiRagService {
       activitiesByLead[a.lead_id].push(a);
     }
 
-    // Build RAG context string for the AI model
-    const crmContextText = leads.length === 0
-      ? 'No active leads found within your assigned domain scope.'
-      : leads.map((l) => {
-          const leadCalls = callsByLead[l.id] || [];
-          const callNotes = leadCalls.map((c) => `[Call: ${c.call_result || 'Completed'} - ${c.description || 'No notes'}]`).join('; ');
-          return `[Lead #${l.id}] Title: "${l.title}" | Domain: "${l.domain_name || 'General'}" | Company: "${l.company_name || l.customer_company || 'N/A'}" | Stage: "${l.stage_name || 'New'}" | Value: ${l.currency || '₹'}${Number(l.estimated_value || 0).toLocaleString()} | Priority: "${l.priority}" | Rep: "${l.salesperson_name || 'Unassigned'}" (${l.salesperson_email || 'N/A'}) | Contact: "${l.contact_name || 'N/A'}" (${l.contact_phone || 'N/A'})${callNotes ? ` | Call History: ${callNotes}` : ''}`;
-        }).join('\n');
+    // Build targeted context for exact search matches
+    const targetedContextText = (targetedLeads || []).map((l) => {
+      const leadCalls = callsByLead[l.id] || [];
+      const callNotes = leadCalls.map((c) => `[Call: ${c.call_result || 'Completed'} - ${c.description || 'No notes'}]`).join('; ');
+      const leadActs = activitiesByLead[l.id] || [];
+      const actNotes = leadActs.map((a) => `[Activity: ${a.type} (${a.status}) - ${a.title || ''}]`).join('; ');
+
+      return `[EXACT MATCHED LEAD - Lead #${l.id}]
+- Title: "${l.title}"
+- Lead Route: /leads/${l.id}
+- Company / Customer: "${l.company_name || l.customer_company || 'N/A'}" (Industry: ${l.industry || 'General'}, City: ${l.city || 'N/A'})
+- Domain: "${l.domain_name || 'General'}"
+- Pipeline: "${l.pipeline || 'Standard Pipeline'}"
+- Current Stage: "${l.stage_name || 'New'}" (Probability: ${l.probability || 0}%)
+- Lead Type: "${l.lead_type || 'New Business'}"
+- Estimated Value: ${l.currency || 'INR'} ${Number(l.estimated_value || 0).toLocaleString()}
+- Priority: "${l.priority || 'medium'}"
+- Assigned Sales Rep: "${l.salesperson_name || 'Unassigned'}" (${l.salesperson_email || 'N/A'})
+- Contact Person: "${l.contact_name || 'N/A'}" (Phone: ${l.contact_phone || 'N/A'}, Email: ${l.contact_email || 'N/A'})
+- Next Scheduled Visit: "${l.next_visit ? new Date(l.next_visit).toISOString().split('T')[0] : 'None scheduled'}"
+- Expected Close Date: "${l.expected_close_date ? new Date(l.expected_close_date).toISOString().split('T')[0] : 'N/A'}"
+- Description / Scope: "${l.description || 'None provided'}"
+- Qualification Reasons: Won: "${l.won_reason || 'N/A'}" | Lost: "${l.lost_reason || 'N/A'}" | On-Hold: "${l.on_hold_reason || 'N/A'}"
+- Created Date: ${l.created_at ? new Date(l.created_at).toISOString().split('T')[0] : 'N/A'} | Updated Date: ${l.updated_at ? new Date(l.updated_at).toISOString().split('T')[0] : 'N/A'}
+- Call Notes: ${callNotes || 'No logged calls'}
+- Activity History: ${actNotes || 'No logged activities'}`;
+    }).join('\n\n');
+
+    // Build context for recent pipeline leads
+    const recentContextText = (recentLeads || []).map((l) => {
+      const leadCalls = callsByLead[l.id] || [];
+      const callNotes = leadCalls.map((c) => `[Call: ${c.call_result || 'Completed'} - ${c.description || 'No notes'}]`).join('; ');
+      return `[Lead #${l.id}] Title: "${l.title}" | Domain: "${l.domain_name || 'General'}" | Company: "${l.company_name || l.customer_company || 'N/A'}" | Stage: "${l.stage_name || 'New'}" | Value: ${l.currency || '₹'}${Number(l.estimated_value || 0).toLocaleString()} | Priority: "${l.priority}" | Rep: "${l.salesperson_name || 'Unassigned'}" (${l.salesperson_email || 'N/A'}) | Contact: "${l.contact_name || 'N/A'}" (${l.contact_phone || 'N/A'})${callNotes ? ` | Call History: ${callNotes}` : ''}`;
+    }).join('\n');
+
+    let crmContextText = '';
+    if (targetedContextText) {
+      crmContextText += `SPECIFIC TARGETED MATCHES FOUND IN CRM FOR USER QUERY:\n${targetedContextText}\n\n`;
+    }
+    if (recentContextText) {
+      crmContextText += `RECENT ACTIVE PIPELINE LEADS:\n${recentContextText}`;
+    }
+    if (!crmContextText) {
+      crmContextText = 'No active leads found within your assigned domain scope.';
+    }
 
     const scopeNotice = isManager
       ? `You are assisting Sales Manager "${user?.name || 'Manager'}". This manager is strictly authorized ONLY for the following Domain(s): [${domainNames.join(', ') || 'Assigned Domain'}]. You MUST NEVER reveal leads, statistics, or salesperson details from other domains outside this scope.`
@@ -415,12 +588,13 @@ ${scopeNotice}
 You must answer strictly using the application CRM records provided below.
 Rules:
 1. Always introduce and refer to yourself strictly as "olgpt ai" (never "SalesCRM Copilot").
-2. When mentioning any lead, ALWAYS format it as a clickable markdown link: [Lead #ID - Title](/leads/ID) (for example: [Lead #4608 - NOC and NAC](/leads/4608)). Do not write standalone URLs like ([/leads/4608]).
-3. Always ground your facts in the provided CRM data. Do not hallucinate data that does not exist.
-4. If asked about Hot Leads, identify high-priority, high-value, and late-stage leads from the authorized domain, explaining why each is hot.
-5. If asked about Next Engagement, suggest the specific next action (WhatsApp follow-up, demo, commercial call) and optimal timing for leads in this domain.
-6. If asked about Qualification Reasoning (Interested vs Not Interested), give the exact justification from the call history and stage.
-7. If no leads exist in the domain scope, clearly state that there are no opportunities currently assigned under this domain.
+2. When mentioning any lead, ALWAYS format it as a clickable markdown link: [Lead #ID - Title](/leads/ID) (for example: [Lead #7902 - Windows Pro License](/leads/7902)). Do not write standalone URLs like ([/leads/7902]).
+3. When the user asks for details about a specific lead or company and an "EXACT MATCHED LEAD" is found in the CRM records above, provide the FULL details clearly (Company, Industry, Value, Stage & Probability, Assigned Sales Rep, Contact Person, Next Visit, Expected Close Date, Description, Pipeline, Calls/Notes) without saying the lead does not exist.
+4. Always ground your facts in the provided CRM data. Do not hallucinate data that does not exist.
+5. If asked about Hot Leads, identify high-priority, high-value, and late-stage leads from the authorized domain, explaining why each is hot.
+6. If asked about Next Engagement, suggest the specific next action (WhatsApp follow-up, demo, commercial call) and optimal timing for leads in this domain.
+7. If asked about Qualification Reasoning (Interested vs Not Interested), give the exact justification from the call history and stage.
+8. If no leads exist in the domain scope, clearly state that there are no opportunities currently assigned under this domain.
 
 AUTHORIZATION DOMAIN: ${domainNames.join(', ') || 'All Domains'}
 CRM APPLICATION RECORDS (${leads.length} Active Domain Leads):
