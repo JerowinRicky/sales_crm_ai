@@ -7,7 +7,7 @@ import toast from 'react-hot-toast';
 import {
   LayoutDashboard, Target, Building2, MapPin, CheckSquare,
   Users, BarChart2, Radio, LogOut, Menu, X, ChevronRight,
-  Settings, ChevronLeft, Contact, ListTodo, CalendarDays ,Phone, LineChart, Bell, Mail
+  Settings, ChevronLeft, Contact, ListTodo, CalendarDays ,Phone, LineChart, Bell, Mail, Sparkles
 } from 'lucide-react';
 
 const NAV = [
@@ -26,6 +26,7 @@ const NAV = [
   { path: '/admin/users', icon: Users, label: 'User Management', admin: true },
   { path: '/admin/mail', icon: Mail, label: 'Mail Center', admin: true },
   { path: '/admin/settings', icon: Settings, label: 'Settings', admin: true },
+  { path: '/admin/ai-settings', icon: Sparkles, label: 'AI Settings', manager: true },
   { path: '/notifications', icon: Bell, label: 'Notifications', all: true, hasBadge: true },
 ];
 

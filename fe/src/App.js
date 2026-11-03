@@ -19,6 +19,7 @@ const UsersPage = lazy(() => import("./pages/admin/UsersPage"));
 const ReportsPage = lazy(() => import("./pages/admin/ReportsPage"));
 const LiveTrackPage = lazy(() => import("./pages/admin/LiveTrackPage"));
 const SettingsPage = lazy(() => import("./pages/admin/SettingsPage"));
+const AiSettingsPage = lazy(() => import("./pages/admin/AiSettingsPage"));
 const MailPage = lazy(() => import("./pages/admin/MailPage"));
 const AnalyticsPage = lazy(() => import("./pages/analytics/AnalyticsPage"));
 // const NewCustomerPage = lazy(() => import("./pages/customer/NewCustomerPage"));
@@ -160,6 +161,18 @@ function AppRoutes() {
                 <SettingsPage />
               </Guard>
             }
+          />
+          <Route
+            path="admin/ai-settings"
+            element={
+              <Guard manager>
+                <AiSettingsPage />
+              </Guard>
+            }
+          />
+          <Route
+            path="ai-settings"
+            element={<Navigate to="/admin/ai-settings" replace />}
           />
           <Route
             path="admin/mail"
