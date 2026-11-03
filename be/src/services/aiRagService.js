@@ -475,7 +475,46 @@ class AiRagService {
 
     const leadIds = leads.map((l) => l.id);
 
-    // 3. Query Recent Call logs related to these leads
+    // 3. Query Active & Upcoming Scheduled Visits
+    const [scheduledVisits] = await pool.query(`
+      SELECT
+        l.id,
+        l.title,
+        l.domain_id,
+        l.assigned_to,
+        l.company_name,
+        l.contact_name,
+        l.contact_phone,
+        l.contact_email,
+        l.estimated_value,
+        l.currency,
+        l.probability,
+        l.priority,
+        l.next_visit,
+        s.name AS stage_name,
+        u.name AS salesperson_name,
+        c.company_name AS customer_company,
+        d.name AS domain_name
+      FROM leads l
+      LEFT JOIN lead_stages s ON l.stage_id = s.id
+      LEFT JOIN users u ON l.assigned_to = u.id
+      LEFT JOIN customers c ON l.customer_id = c.id
+      LEFT JOIN domains d ON l.domain_id = d.id
+      ${whereBaseSql} AND l.next_visit IS NOT NULL AND l.next_visit >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
+      ORDER BY l.next_visit ASC
+      LIMIT 20
+    `, rbacParams);
+
+    if (!isAdmin) {
+      for (const l of scheduledVisits) {
+        if (l.assigned_to && Array.isArray(domainUserIds) && !domainUserIds.includes(l.assigned_to)) {
+          l.salesperson_name = 'Domain Sales Rep';
+          l.salesperson_email = null;
+        }
+      }
+    }
+
+    // 4. Query Recent Call logs related to these leads
     let calls = [];
     if (leadIds.length > 0) {
       const [callRows] = await pool.query(`
@@ -497,7 +536,7 @@ class AiRagService {
       calls = callRows;
     }
 
-    // 4. Query Activities related to these leads
+    // 5. Query Activities related to these leads
     let activities = [];
     if (leadIds.length > 0) {
       const [actRows] = await pool.query(`
@@ -519,7 +558,7 @@ class AiRagService {
       activities = actRows;
     }
 
-    return { leads, targetedLeads, recentLeads, calls, activities };
+    return { leads, targetedLeads, recentLeads, scheduledVisits, calls, activities };
   }
 
   /**
@@ -643,7 +682,7 @@ class AiRagService {
     const ragSettings = await this.getRagSettings();
     // Retrieve CRM records strictly scoped to this user's domain permissions, matching search terms if query is specific
     const crmData = await this.getCRMApplicationData(ragSettings.max_context_leads || 35, effectiveUser, prompt);
-    const { leads, targetedLeads, recentLeads, calls, activities } = crmData;
+    const { leads, targetedLeads, recentLeads, scheduledVisits, calls, activities } = crmData;
 
     // Build lead lookup map
     const callsByLead = {};
@@ -686,16 +725,29 @@ class AiRagService {
 - Activity History: ${actNotes || 'No logged activities'}`;
     }).join('\n\n');
 
+    // Build context for scheduled upcoming visits
+    let scheduledVisitsContextText = '';
+    if (scheduledVisits && scheduledVisits.length > 0) {
+      scheduledVisitsContextText = scheduledVisits.map((l) => {
+        const vDate = l.next_visit ? new Date(l.next_visit).toISOString().split('T')[0] : 'None';
+        return `[Lead #${l.id} - ${l.title}] Next Visit Date: ${vDate} | Priority: "${l.priority}" | Stage: "${l.stage_name || 'New'}" | Domain: "${l.domain_name || 'General'}" | Company: "${l.company_name || l.customer_company || 'N/A'}" | Sales Rep: "${l.salesperson_name || 'Unassigned'}"`;
+      }).join('\n');
+    }
+
     // Build context for recent pipeline leads
     const recentContextText = (recentLeads || []).map((l) => {
       const leadCalls = callsByLead[l.id] || [];
       const callNotes = leadCalls.map((c) => `[Call: ${c.call_result || 'Completed'} - ${c.description || 'No notes'}]`).join('; ');
-      return `[Lead #${l.id}] Title: "${l.title}" | Domain: "${l.domain_name || 'General'}" | Company: "${l.company_name || l.customer_company || 'N/A'}" | Stage: "${l.stage_name || 'New'}" | Value: ${l.currency || '₹'}${Number(l.estimated_value || 0).toLocaleString()} | Priority: "${l.priority}" | Rep: "${l.salesperson_name || 'Unassigned'}" (${l.salesperson_email || 'N/A'}) | Contact: "${l.contact_name || 'N/A'}" (${l.contact_phone || 'N/A'})${callNotes ? ` | Call History: ${callNotes}` : ''}`;
+      const visitDate = l.next_visit ? new Date(l.next_visit).toISOString().split('T')[0] : 'None scheduled';
+      return `[Lead #${l.id}] Title: "${l.title}" | Domain: "${l.domain_name || 'General'}" | Company: "${l.company_name || l.customer_company || 'N/A'}" | Stage: "${l.stage_name || 'New'}" | Value: ${l.currency || '₹'}${Number(l.estimated_value || 0).toLocaleString()} | Priority: "${l.priority}" | Next Visit: ${visitDate} | Rep: "${l.salesperson_name || 'Unassigned'}" (${l.salesperson_email || 'N/A'}) | Contact: "${l.contact_name || 'N/A'}" (${l.contact_phone || 'N/A'})${callNotes ? ` | Call History: ${callNotes}` : ''}`;
     }).join('\n');
 
     let crmContextText = '';
     if (targetedContextText) {
       crmContextText += `SPECIFIC TARGETED MATCHES FOUND IN CRM FOR USER QUERY:\n${targetedContextText}\n\n`;
+    }
+    if (scheduledVisitsContextText) {
+      crmContextText += `ACTIVE & UPCOMING SCHEDULED VISITS IN PIPELINE:\n${scheduledVisitsContextText}\n\n`;
     }
     if (recentContextText) {
       crmContextText += `RECENT ACTIVE PIPELINE LEADS:\n${recentContextText}`;
@@ -721,19 +773,40 @@ class AiRagService {
       ? '1. Identity & Greeting: You are olgpt ai. Since this is the first message in this conversation, you may give a brief initial greeting introducing yourself as olgpt ai.'
       : '1. Identity & Direct Answer: You are olgpt ai. DO NOT introduce yourself or repeat greetings like "Hello System Admin, I am olgpt ai...". Answer the user\'s question immediately and directly according to what was asked.';
 
+    // Dynamic Calendar & Date Anchor
+    const now = new Date();
+    const todayStr = now.toISOString().split('T')[0];
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = tomorrow.toISOString().split('T')[0];
+    const dateOptions = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+    const formattedToday = now.toLocaleDateString('en-US', dateOptions);
+    const formattedTomorrow = tomorrow.toLocaleDateString('en-US', dateOptions);
+
     const systemPrompt = `You are olgpt ai, an enterprise sales intelligence AI assistant embedded inside the CRM.
 ${scopeNotice}
 You must answer strictly using the application CRM records provided below.
+
+CURRENT REFERENCE TIMELINE:
+- Today's Date: ${formattedToday} (${todayStr})
+- Tomorrow's Date: ${formattedTomorrow} (${tomorrowStr})
+
 Rules:
 ${greetingRule}
 2. User & Admin Privacy: Administrative user details, admin credentials, and system admin accounts are strictly restricted and must never be exposed. If asked about team members or users in this domain, only refer to authorized domain team members: [${domainUserNames.join(', ')}]. Never reveal or list user names outside this authorized team.
 3. When mentioning any lead, ALWAYS format it as a clickable markdown link: [Lead #ID - Title](/leads/ID) (for example: [Lead #7902 - Windows Pro License](/leads/7902)). Do not write standalone URLs like ([/leads/7902]).
 4. When the user asks for details about a specific lead or company and an "EXACT MATCHED LEAD" is found in the CRM records above, provide the FULL details clearly (Company, Industry, Value, Stage & Probability, Assigned Sales Rep, Contact Person, Next Visit, Expected Close Date, Description, Pipeline, Calls/Notes) without saying the lead does not exist.
-5. Always ground your facts in the provided CRM data. Do not hallucinate data that does not exist.
-6. If asked about Hot Leads, identify high-priority, high-value, and late-stage leads from the authorized domain, explaining why each is hot.
-7. If asked about Next Engagement, suggest the specific next action (WhatsApp follow-up, demo, commercial call) and optimal timing for leads in this domain.
-8. If asked about Qualification Reasoning (Interested vs Not Interested), give the exact justification from the call history and stage.
-9. If no leads exist in the domain scope, clearly state that there are no opportunities currently assigned under this domain.
+5. Scheduled Visits & Calendar Timing:
+   - When asked about visits for "today", "tomorrow", or any specific date/timeframe:
+     * ONLY list leads that actually have a matching "Next Visit Date".
+     * If NO leads are scheduled for that specific requested date (such as tomorrow ${tomorrowStr}), state clearly: "There are no leads currently scheduled for a visit tomorrow (${tomorrowStr})."
+     * You may optionally list the nearest upcoming scheduled visits from the "ACTIVE & UPCOMING SCHEDULED VISITS IN PIPELINE" list (e.g., "The next upcoming scheduled visit is [Lead #ID - Title](/leads/ID) on YYYY-MM-DD").
+     * CRITICAL: NEVER mention, suggest, or bring up leads that have "None scheduled" or no visit date just because they have "critical" or "high" priority! Mentioning unscheduled leads in a visit query falsely implies they have a visit scheduled.
+6. Always ground your facts in the provided CRM data. Do not hallucinate data that does not exist.
+7. If asked about Hot Leads, identify high-priority, high-value, and late-stage leads from the authorized domain, explaining why each is hot.
+8. If asked about Next Engagement, suggest the specific next action (WhatsApp follow-up, demo, commercial call) and optimal timing for leads in this domain.
+9. If asked about Qualification Reasoning (Interested vs Not Interested), give the exact justification from the call history and stage.
+10. If no leads exist in the domain scope, clearly state that there are no opportunities currently assigned under this domain.
 
 AUTHORIZATION DOMAIN: ${domainNames.join(', ') || 'All Domains'}
 CRM APPLICATION RECORDS (${leads.length} Active Domain Leads):
