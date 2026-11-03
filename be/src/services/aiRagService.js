@@ -139,7 +139,17 @@ class AiRagService {
    * Helper to resolve user domain scope for RBAC enforcement
    */
   async getUserDomainScope(user) {
-    if (!user) return { isAdmin: true, isManager: false, isSalesperson: false, domainIds: [], domainNames: [] };
+    if (!user) {
+      return {
+        isAdmin: true,
+        isManager: false,
+        isSalesperson: false,
+        domainIds: [],
+        domainNames: [],
+        domainUserIds: [],
+        domainUserNames: [],
+      };
+    }
 
     const role = (user.role_name || user.role || '').toLowerCase();
     const isAdmin = role === 'admin' || user.role_id === 1;
@@ -165,12 +175,40 @@ class AiRagService {
       domainNames = dRows.map((r) => r.name);
     }
 
+    // Resolve authorized domain team users for managers (strictly excluding admins)
+    let domainUserIds = [user.id];
+    let domainUserNames = [user.name];
+
+    if (isAdmin) {
+      const [allUsers] = await pool.query('SELECT id, name FROM users WHERE is_active = 1');
+      domainUserIds = allUsers.map((u) => u.id);
+      domainUserNames = allUsers.map((u) => u.name);
+    } else if (isManager && domainIds.length > 0) {
+      const [uRows] = await pool.query(`
+        SELECT DISTINCT u.id, u.name 
+        FROM users u
+        JOIN user_domains ud ON u.id = ud.user_id
+        WHERE ud.domain_id IN (${domainIds.map(() => '?').join(',')})
+          AND u.role_id != 1
+          AND u.is_active = 1
+      `, domainIds);
+      const teamMap = new Map();
+      teamMap.set(user.id, user.name);
+      for (const row of uRows) {
+        teamMap.set(row.id, row.name);
+      }
+      domainUserIds = Array.from(teamMap.keys());
+      domainUserNames = Array.from(teamMap.values());
+    }
+
     return {
       isAdmin,
       isManager,
       isSalesperson: !isAdmin && !isManager,
       domainIds,
       domainNames,
+      domainUserIds,
+      domainUserNames,
     };
   }
 
@@ -205,7 +243,7 @@ class AiRagService {
    * Performs dynamic keyword/ID search across all CRM leads when userPrompt is provided.
    */
   async getCRMApplicationData(limit = 35, user = null, userPrompt = '') {
-    const { isAdmin, isManager, isSalesperson, domainIds } = await this.getUserDomainScope(user);
+    const { isAdmin, isManager, isSalesperson, domainIds, domainUserIds } = await this.getUserDomainScope(user);
 
     let whereBaseSql = 'WHERE l.is_active = 1';
     const rbacParams = [];
@@ -263,6 +301,7 @@ class AiRagService {
             l.id,
             l.title,
             l.domain_id,
+            l.assigned_to,
             l.company_name,
             l.contact_name,
             l.contact_phone,
@@ -340,6 +379,7 @@ class AiRagService {
         l.id,
         l.title,
         l.domain_id,
+        l.assigned_to,
         l.company_name,
         l.contact_name,
         l.contact_phone,
@@ -380,6 +420,17 @@ class AiRagService {
     `, recentParams);
 
     const leads = [...targetedLeads, ...recentLeads];
+
+    // Privacy mask: if user is not admin, mask any salesperson name outside their authorized domain team
+    if (!isAdmin) {
+      for (const l of leads) {
+        if (l.assigned_to && Array.isArray(domainUserIds) && !domainUserIds.includes(l.assigned_to)) {
+          l.salesperson_name = 'Domain Sales Rep';
+          l.salesperson_email = null;
+        }
+      }
+    }
+
     const leadIds = leads.map((l) => l.id);
 
     // 3. Query Recent Call logs related to these leads
@@ -474,8 +525,9 @@ class AiRagService {
   /**
    * Core AI Copilot Query Engine (RAG strictly grounded on CRM Application Data with RBAC domain scoping)
    */
-  async processCopilotQuery({ conversationId = null, queryType = 'custom', prompt = '', user = null }) {
-    const userId = user?.id || 1;
+  async processCopilotQuery({ conversationId = null, queryType = 'custom', prompt = '', user = null }, secondUser = null) {
+    const effectiveUser = user || secondUser;
+    const userId = effectiveUser?.id || 1;
 
     // 1. STRICT REQUIREMENT: Only work if AI Gateway has an API key configured.
     const [gwRows] = await pool.query('SELECT * FROM ai_gateway_settings ORDER BY id ASC LIMIT 1');
@@ -512,11 +564,30 @@ class AiRagService {
       };
     }
 
+    const { isAdmin, isManager, domainNames, domainUserIds, domainUserNames } = await this.getUserDomainScope(effectiveUser);
+
+    // PRIVACY & SECURITY CHECK:
+    // Administrative user accounts and credentials are strictly restricted for non-admins
+    const isAskingAboutAdmins = /\b(admin|admins|administrator|administrators)\b/i.test(prompt) &&
+      /\b(who|list|show|what|names?|details?|my|the|give|all)\b/i.test(prompt);
+
+    if (!isAdmin && isAskingAboutAdmins) {
+      const restrictedMsg = 'Administrative user details are restricted.';
+      await this.saveCopilotMessage(userId, activeConvId, 'user', queryType || 'custom', prompt);
+      await this.saveCopilotMessage(userId, activeConvId, 'assistant', queryType || 'custom', restrictedMsg, [], []);
+      return {
+        conversation_id: activeConvId,
+        query_type: queryType || 'custom',
+        message: restrictedMsg,
+        cards: [],
+        grounded_source: 'Access Restricted',
+      };
+    }
+
     const ragSettings = await this.getRagSettings();
     // Retrieve CRM records strictly scoped to this user's domain permissions, matching search terms if query is specific
-    const crmData = await this.getCRMApplicationData(ragSettings.max_context_leads || 35, user, prompt);
+    const crmData = await this.getCRMApplicationData(ragSettings.max_context_leads || 35, effectiveUser, prompt);
     const { leads, targetedLeads, recentLeads, calls, activities } = crmData;
-    const { isAdmin, isManager, domainNames } = await this.getUserDomainScope(user);
 
     // Build lead lookup map
     const callsByLead = {};
@@ -578,7 +649,7 @@ class AiRagService {
     }
 
     const scopeNotice = isManager
-      ? `You are assisting Sales Manager "${user?.name || 'Manager'}". This manager is strictly authorized ONLY for the following Domain(s): [${domainNames.join(', ') || 'Assigned Domain'}]. You MUST NEVER reveal leads, statistics, or salesperson details from other domains outside this scope.`
+      ? `You are assisting Sales Manager "${user?.name || 'Manager'}". This manager is strictly authorized ONLY for the following Domain(s): [${domainNames.join(', ') || 'Assigned Domain'}]. Authorized domain team members: [${domainUserNames.join(', ')}]. You MUST NEVER reveal leads, statistics, or salesperson details from other domains outside this scope.`
       : isAdmin
       ? `You are assisting System Administrator "${user?.name || 'Admin'}". Full cross-domain CRM data access is granted.`
       : `You are assisting Sales Representative "${user?.name || 'Salesperson'}". Only their personally assigned opportunities are included.`;
@@ -599,13 +670,14 @@ ${scopeNotice}
 You must answer strictly using the application CRM records provided below.
 Rules:
 ${greetingRule}
-2. When mentioning any lead, ALWAYS format it as a clickable markdown link: [Lead #ID - Title](/leads/ID) (for example: [Lead #7902 - Windows Pro License](/leads/7902)). Do not write standalone URLs like ([/leads/7902]).
-3. When the user asks for details about a specific lead or company and an "EXACT MATCHED LEAD" is found in the CRM records above, provide the FULL details clearly (Company, Industry, Value, Stage & Probability, Assigned Sales Rep, Contact Person, Next Visit, Expected Close Date, Description, Pipeline, Calls/Notes) without saying the lead does not exist.
-4. Always ground your facts in the provided CRM data. Do not hallucinate data that does not exist.
-5. If asked about Hot Leads, identify high-priority, high-value, and late-stage leads from the authorized domain, explaining why each is hot.
-6. If asked about Next Engagement, suggest the specific next action (WhatsApp follow-up, demo, commercial call) and optimal timing for leads in this domain.
-7. If asked about Qualification Reasoning (Interested vs Not Interested), give the exact justification from the call history and stage.
-8. If no leads exist in the domain scope, clearly state that there are no opportunities currently assigned under this domain.
+2. User & Admin Privacy: Administrative user details, admin credentials, and system admin accounts are strictly restricted and must never be exposed. If asked about team members or users in this domain, only refer to authorized domain team members: [${domainUserNames.join(', ')}]. Never reveal or list user names outside this authorized team.
+3. When mentioning any lead, ALWAYS format it as a clickable markdown link: [Lead #ID - Title](/leads/ID) (for example: [Lead #7902 - Windows Pro License](/leads/7902)). Do not write standalone URLs like ([/leads/7902]).
+4. When the user asks for details about a specific lead or company and an "EXACT MATCHED LEAD" is found in the CRM records above, provide the FULL details clearly (Company, Industry, Value, Stage & Probability, Assigned Sales Rep, Contact Person, Next Visit, Expected Close Date, Description, Pipeline, Calls/Notes) without saying the lead does not exist.
+5. Always ground your facts in the provided CRM data. Do not hallucinate data that does not exist.
+6. If asked about Hot Leads, identify high-priority, high-value, and late-stage leads from the authorized domain, explaining why each is hot.
+7. If asked about Next Engagement, suggest the specific next action (WhatsApp follow-up, demo, commercial call) and optimal timing for leads in this domain.
+8. If asked about Qualification Reasoning (Interested vs Not Interested), give the exact justification from the call history and stage.
+9. If no leads exist in the domain scope, clearly state that there are no opportunities currently assigned under this domain.
 
 AUTHORIZATION DOMAIN: ${domainNames.join(', ') || 'All Domains'}
 CRM APPLICATION RECORDS (${leads.length} Active Domain Leads):
