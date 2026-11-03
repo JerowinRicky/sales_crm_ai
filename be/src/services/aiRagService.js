@@ -583,11 +583,22 @@ class AiRagService {
       ? `You are assisting System Administrator "${user?.name || 'Admin'}". Full cross-domain CRM data access is granted.`
       : `You are assisting Sales Representative "${user?.name || 'Salesperson'}". Only their personally assigned opportunities are included.`;
 
+    // Check if this conversation already has assistant messages
+    const [existingMsgs] = await pool.query(
+      'SELECT id FROM ai_copilot_messages WHERE conversation_id = ? AND role = "assistant" LIMIT 1',
+      [activeConvId]
+    );
+    const isFirstMessage = existingMsgs.length === 0;
+
+    const greetingRule = isFirstMessage
+      ? '1. Identity & Greeting: You are olgpt ai. Since this is the first message in this conversation, you may give a brief initial greeting introducing yourself as olgpt ai.'
+      : '1. Identity & Direct Answer: You are olgpt ai. DO NOT introduce yourself or repeat greetings like "Hello System Admin, I am olgpt ai...". Answer the user\'s question immediately and directly according to what was asked.';
+
     const systemPrompt = `You are olgpt ai, an enterprise sales intelligence AI assistant embedded inside the CRM.
 ${scopeNotice}
 You must answer strictly using the application CRM records provided below.
 Rules:
-1. Always introduce and refer to yourself strictly as "olgpt ai" (never "SalesCRM Copilot").
+${greetingRule}
 2. When mentioning any lead, ALWAYS format it as a clickable markdown link: [Lead #ID - Title](/leads/ID) (for example: [Lead #7902 - Windows Pro License](/leads/7902)). Do not write standalone URLs like ([/leads/7902]).
 3. When the user asks for details about a specific lead or company and an "EXACT MATCHED LEAD" is found in the CRM records above, provide the FULL details clearly (Company, Industry, Value, Stage & Probability, Assigned Sales Rep, Contact Person, Next Visit, Expected Close Date, Description, Pipeline, Calls/Notes) without saying the lead does not exist.
 4. Always ground your facts in the provided CRM data. Do not hallucinate data that does not exist.
@@ -616,7 +627,15 @@ ${crmContextText}`;
       aiAnswer = `AI Gateway error: ${llmErr.message || 'Please check API key.'}`;
     }
 
-    const finalMessage = aiAnswer || 'No response from AI.';
+    let finalMessage = aiAnswer || 'No response from AI.';
+
+    // If this is not the first message in this chat session, strip any redundant intro headers
+    if (!isFirstMessage && typeof finalMessage === 'string') {
+      finalMessage = finalMessage
+        .replace(/^(?:hello|hi|hey|greetings)[^\n.]*?(?:,\s*|\s+-\s*|\s*!\s*)(?:i am|this is)?\s*olgpt ai[^\n.]*?[.!?]\s*/i, '')
+        .replace(/^i am olgpt ai[^\n.]*?[.!?]\s*/i, '')
+        .trim();
+    }
 
     await this.saveCopilotMessage(userId, activeConvId, 'user', queryType || 'custom', prompt);
     await this.saveCopilotMessage(userId, activeConvId, 'assistant', queryType || 'custom', finalMessage, leads.slice(0, 5).map((l) => l.id), []);
