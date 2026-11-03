@@ -362,7 +362,7 @@ class AiRagService {
     }
 
     if (!hasLlmKey) {
-      const notConfiguredMsg = 'AI not configured.';
+      const notConfiguredMsg = '⚠️ AI Is Not Configured';
 
       await this.saveCopilotMessage(userId, activeConvId, 'user', queryType || 'custom', prompt);
       await this.saveCopilotMessage(userId, activeConvId, 'assistant', queryType || 'custom', notConfiguredMsg, [], []);
