@@ -136,14 +136,77 @@ class AiRagService {
   }
 
   /**
-   * Retrieve Application Grounding Context from CRM Database
+   * Helper to resolve user domain scope for RBAC enforcement
    */
-  async getCRMApplicationData(limit = 35) {
-    // 1. Query Leads with Stages and Sales Rep info
+  async getUserDomainScope(user) {
+    if (!user) return { isAdmin: true, isManager: false, isSalesperson: false, domainIds: [], domainNames: [] };
+
+    const role = (user.role_name || user.role || '').toLowerCase();
+    const isAdmin = role === 'admin' || user.role_id === 1;
+    const isManager = role === 'sales_manager' || user.role_id === 2;
+
+    let domainIds = user.domain_ids || [];
+    let domainNames = [];
+
+    if (isManager && domainIds.length === 0) {
+      const [ud] = await pool.query(`
+        SELECT ud.domain_id, d.name AS domain_name 
+        FROM user_domains ud
+        JOIN domains d ON ud.domain_id = d.id
+        WHERE ud.user_id = ?
+      `, [user.id]);
+      domainIds = ud.map((r) => r.domain_id);
+      domainNames = ud.map((r) => r.domain_name);
+    } else if (domainIds.length > 0) {
+      const [dRows] = await pool.query(
+        `SELECT name FROM domains WHERE id IN (${domainIds.map(() => '?').join(',')})`,
+        domainIds
+      );
+      domainNames = dRows.map((r) => r.name);
+    }
+
+    return {
+      isAdmin,
+      isManager,
+      isSalesperson: !isAdmin && !isManager,
+      domainIds,
+      domainNames,
+    };
+  }
+
+  /**
+   * Retrieve Application Grounding Context from CRM Database with strict domain RBAC
+   */
+  async getCRMApplicationData(limit = 35, user = null) {
+    const { isAdmin, isManager, isSalesperson, domainIds } = await this.getUserDomainScope(user);
+
+    let whereSql = 'WHERE l.is_active = 1';
+    const params = [];
+
+    // RBAC: Manager can only see their domain leads and team members
+    if (isManager) {
+      if (domainIds.length > 0) {
+        whereSql += ` AND l.domain_id IN (${domainIds.map(() => '?').join(',')})`;
+        params.push(...domainIds);
+      } else {
+        // If manager has no domain assigned, limit strictly to their own leads
+        whereSql += ' AND (l.assigned_to = ? OR l.created_by = ?)';
+        params.push(user.id, user.id);
+      }
+    } else if (isSalesperson && user) {
+      // Salesperson can only see their assigned leads
+      whereSql += ' AND l.assigned_to = ?';
+      params.push(user.id);
+    }
+
+    params.push(Number(limit));
+
+    // 1. Query Leads with Stages, Rep info, and Domain info
     const [leads] = await pool.query(`
       SELECT
         l.id,
         l.title,
+        l.domain_id,
         l.company_name,
         l.contact_name,
         l.contact_phone,
@@ -165,18 +228,21 @@ class AiRagService {
         s.is_won,
         s.is_closed,
         u.name AS salesperson_name,
+        u.email AS salesperson_email,
         c.company_name AS customer_company,
         c.industry,
         c.city,
-        c.state
+        c.state,
+        d.name AS domain_name
       FROM leads l
       LEFT JOIN lead_stages s ON l.stage_id = s.id
       LEFT JOIN users u ON l.assigned_to = u.id
       LEFT JOIN customers c ON l.customer_id = c.id
-      WHERE l.is_active = 1
+      LEFT JOIN domains d ON l.domain_id = d.id
+      ${whereSql}
       ORDER BY l.updated_at DESC
       LIMIT ?
-    `, [Number(limit)]);
+    `, params);
 
     const leadIds = leads.map((l) => l.id);
 
@@ -228,14 +294,72 @@ class AiRagService {
   }
 
   /**
-   * Core AI Copilot Query Engine (RAG strictly grounded on CRM Application Data + Web Search)
+   * Conversation Management per User
    */
-  async processCopilotQuery({ queryType = 'custom', prompt = '', user = null }) {
+  async getConversations(userId) {
+    const [rows] = await pool.query(`
+      SELECT 
+        c.id,
+        c.user_id,
+        c.title,
+        c.created_at,
+        c.updated_at,
+        (SELECT message FROM ai_copilot_messages WHERE conversation_id = c.id ORDER BY id ASC LIMIT 1) AS first_message,
+        (SELECT COUNT(*) FROM ai_copilot_messages WHERE conversation_id = c.id) AS message_count
+      FROM ai_copilot_conversations c
+      WHERE c.user_id = ?
+      ORDER BY c.updated_at DESC
+      LIMIT 100
+    `, [userId]);
+    return rows;
+  }
+
+  async createConversation(userId, title = 'New Chat') {
+    const cleanTitle = (title || 'New Chat').trim().slice(0, 60);
+    const [res] = await pool.query(`
+      INSERT INTO ai_copilot_conversations (user_id, title) VALUES (?, ?)
+    `, [userId, cleanTitle]);
+    return {
+      id: res.insertId,
+      user_id: userId,
+      title: cleanTitle,
+      created_at: new Date(),
+      updated_at: new Date(),
+      message_count: 0,
+    };
+  }
+
+  async deleteConversation(userId, conversationId) {
+    await pool.query('DELETE FROM ai_copilot_messages WHERE conversation_id = ? AND user_id = ?', [conversationId, userId]);
+    await pool.query('DELETE FROM ai_copilot_conversations WHERE id = ? AND user_id = ?', [conversationId, userId]);
+    return { success: true, message: 'Conversation deleted' };
+  }
+
+  /**
+   * Core AI Copilot Query Engine (RAG strictly grounded on CRM Application Data with RBAC domain scoping)
+   */
+  async processCopilotQuery({ conversationId = null, queryType = 'custom', prompt = '', user = null }) {
+    const userId = user?.id || 1;
+
     // 1. STRICT REQUIREMENT: Only work if AI Gateway has an API key configured.
-    // Fetch active AI Gateway settings
     const [gwRows] = await pool.query('SELECT * FROM ai_gateway_settings ORDER BY id ASC LIMIT 1');
     const gateway = gwRows?.[0] || null;
     const hasLlmKey = !!(gateway && gateway.llm_api_key && gateway.llm_api_key.trim().length > 0);
+
+    // Resolve or Auto-create Conversation for User
+    let activeConvId = conversationId;
+    if (!activeConvId) {
+      const conv = await this.createConversation(userId, prompt ? prompt.slice(0, 35) : 'Sales Inquiry');
+      activeConvId = conv.id;
+    } else {
+      // Update title if it's currently 'New Chat'
+      if (prompt && prompt.length > 2) {
+        await pool.query(
+          "UPDATE ai_copilot_conversations SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND (title = 'New Chat' OR title = 'New Conversation')",
+          [prompt.slice(0, 35), activeConvId, userId]
+        );
+      }
+    }
 
     if (!hasLlmKey) {
       const notConfiguredMsg = `### ⚠️ AI Is Not Configured\n\n` +
@@ -247,10 +371,11 @@ class AiRagService {
         `3. Enter your valid **API Key** and click **Save Configuration**.\n\n` +
         `Once configured, every question and lead analysis will be sent directly to your chosen AI model with live CRM data context.`;
 
-      await this.saveCopilotMessage(user?.id || 1, 'user', queryType || 'custom', prompt);
-      await this.saveCopilotMessage(user?.id || 1, 'assistant', queryType || 'custom', notConfiguredMsg, [], []);
+      await this.saveCopilotMessage(userId, activeConvId, 'user', queryType || 'custom', prompt);
+      await this.saveCopilotMessage(userId, activeConvId, 'assistant', queryType || 'custom', notConfiguredMsg, [], []);
 
       return {
+        conversation_id: activeConvId,
         query_type: queryType || 'custom',
         message: notConfiguredMsg,
         cards: [],
@@ -259,8 +384,10 @@ class AiRagService {
     }
 
     const ragSettings = await this.getRagSettings();
-    const crmData = await this.getCRMApplicationData(ragSettings.max_context_leads || 35);
+    // Retrieve CRM records strictly scoped to this user's domain permissions
+    const crmData = await this.getCRMApplicationData(ragSettings.max_context_leads || 35, user);
     const { leads, calls, activities } = crmData;
+    const { isAdmin, isManager, domainNames } = await this.getUserDomainScope(user);
 
     // Build lead lookup map
     const callsByLead = {};
@@ -276,31 +403,42 @@ class AiRagService {
     }
 
     // Build RAG context string for the AI model
-    const crmContextText = leads.map((l, i) => {
-      const leadCalls = callsByLead[l.id] || [];
-      const callNotes = leadCalls.map((c) => `[Call: ${c.call_result || 'Completed'} - ${c.description || 'No notes'}]`).join('; ');
-      return `[Lead #${l.id}] Title: "${l.title}" | Company: "${l.company_name || l.customer_company || 'N/A'}" | Stage: "${l.stage_name || 'New'}" | Value: ${l.currency || '₹'}${Number(l.estimated_value || 0).toLocaleString()} | Priority: "${l.priority}" | Rep: "${l.salesperson_name || 'Unassigned'}" | Contact: "${l.contact_name || 'N/A'}" (${l.contact_phone || 'N/A'})${callNotes ? ` | Call History: ${callNotes}` : ''}`;
-    }).join('\n');
+    const crmContextText = leads.length === 0
+      ? 'No active leads found within your assigned domain scope.'
+      : leads.map((l) => {
+          const leadCalls = callsByLead[l.id] || [];
+          const callNotes = leadCalls.map((c) => `[Call: ${c.call_result || 'Completed'} - ${c.description || 'No notes'}]`).join('; ');
+          return `[Lead #${l.id}] Title: "${l.title}" | Domain: "${l.domain_name || 'General'}" | Company: "${l.company_name || l.customer_company || 'N/A'}" | Stage: "${l.stage_name || 'New'}" | Value: ${l.currency || '₹'}${Number(l.estimated_value || 0).toLocaleString()} | Priority: "${l.priority}" | Rep: "${l.salesperson_name || 'Unassigned'}" (${l.salesperson_email || 'N/A'}) | Contact: "${l.contact_name || 'N/A'}" (${l.contact_phone || 'N/A'})${callNotes ? ` | Call History: ${callNotes}` : ''}`;
+        }).join('\n');
+
+    const scopeNotice = isManager
+      ? `You are assisting Sales Manager "${user?.name || 'Manager'}". This manager is strictly authorized ONLY for the following Domain(s): [${domainNames.join(', ') || 'Assigned Domain'}]. You MUST NEVER reveal leads, statistics, or salesperson details from other domains outside this scope.`
+      : isAdmin
+      ? `You are assisting System Administrator "${user?.name || 'Admin'}". Full cross-domain CRM data access is granted.`
+      : `You are assisting Sales Representative "${user?.name || 'Salesperson'}". Only their personally assigned opportunities are included.`;
 
     const systemPrompt = `You are SalesCRM Copilot, an enterprise AI assistant embedded inside the sales CRM.
+${scopeNotice}
 You must answer strictly using the application CRM records provided below.
 Rules:
 1. Always ground your facts in the provided CRM data. Do not hallucinate data that does not exist.
 2. When mentioning leads, quote the Lead ID and title in format [Lead Title](/leads/ID).
-3. If asked about Hot Leads, identify high-priority, high-value, and late-stage leads, explaining why each is hot.
-4. If asked about Next Engagement, suggest the specific next action (WhatsApp follow-up, demo, commercial call) and optimal timing.
+3. If asked about Hot Leads, identify high-priority, high-value, and late-stage leads from the authorized domain, explaining why each is hot.
+4. If asked about Next Engagement, suggest the specific next action (WhatsApp follow-up, demo, commercial call) and optimal timing for leads in this domain.
 5. If asked about Qualification Reasoning (Interested vs Not Interested), give the exact justification from the call history and stage.
+6. If no leads exist in the domain scope, clearly state that there are no opportunities currently assigned under this domain.
 
-CRM APPLICATION RECORDS (${leads.length} Active Leads):
+AUTHORIZATION DOMAIN: ${domainNames.join(', ') || 'All Domains'}
+CRM APPLICATION RECORDS (${leads.length} Active Domain Leads):
 ${crmContextText}`;
 
     let userPromptToSend = prompt;
     if (queryType === 'hot_leads' || /hot\s*lead/i.test(prompt)) {
-      userPromptToSend = 'Identify the hot leads from the CRM data with high probability of closing. Give each a quality score (0-100) and explain why it is classified as a hot lead.';
+      userPromptToSend = 'Identify the hot leads from my authorized CRM domain data with high probability of closing. Give each a quality score (0-100) and explain why it is classified as a hot lead.';
     } else if (queryType === 'next_engagement' || /next\s*engagement/i.test(prompt)) {
-      userPromptToSend = 'Review the active leads and recommend the next best sales engagement to take for each priority lead and the optimal time to do it.';
+      userPromptToSend = 'Review the active leads in my domain and recommend the next best sales engagement to take for each priority lead and the optimal time to do it.';
     } else if (queryType === 'qualification_reasoning' || /interested|qualification/i.test(prompt)) {
-      userPromptToSend = 'Review the leads and explain why leads were marked Interested or Not Interested based on the CRM call histories and notes.';
+      userPromptToSend = 'Review the leads in my domain and explain why leads were marked Interested or Not Interested based on the CRM call histories and notes.';
     }
 
     let aiAnswer = null;
@@ -312,10 +450,14 @@ ${crmContextText}`;
 
     const finalMessage = aiAnswer || `### ⚠️ AI Gateway Returned Empty\n\nThe AI model did not return a response. Please verify your model parameters in **[AI Settings](/settings/ai)**.`;
 
-    await this.saveCopilotMessage(user?.id || 1, 'user', queryType || 'custom', prompt);
-    await this.saveCopilotMessage(user?.id || 1, 'assistant', queryType || 'custom', finalMessage, leads.slice(0, 5).map((l) => l.id), []);
+    await this.saveCopilotMessage(userId, activeConvId, 'user', queryType || 'custom', prompt);
+    await this.saveCopilotMessage(userId, activeConvId, 'assistant', queryType || 'custom', finalMessage, leads.slice(0, 5).map((l) => l.id), []);
+
+    // Update conversation timestamp
+    await pool.query('UPDATE ai_copilot_conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?', [activeConvId]);
 
     return {
+      conversation_id: activeConvId,
       query_type: queryType || 'custom',
       message: finalMessage,
       cards: leads.slice(0, 5).map((l) => ({
@@ -327,8 +469,9 @@ ${crmContextText}`;
         estimated_value: l.estimated_value,
         currency: l.currency || '₹',
         stage: l.stage_name,
+        domain_name: l.domain_name,
       })),
-      grounded_source: `${gateway.llm_provider.toUpperCase()} (${gateway.llm_model})`,
+      grounded_source: `${gateway.llm_provider.toUpperCase()} (${gateway.llm_model}) [Domain Scope: ${domainNames.join(', ') || 'All'}]`,
     };
   }
 
@@ -406,16 +549,17 @@ ${crmContextText}`;
   }
 
   /**
-   * Save message to history
+   * Save message to history (scoped to user and conversation)
    */
-  async saveCopilotMessage(userId, role, queryType, message, contextLeadIds = null, structuredPayload = null) {
+  async saveCopilotMessage(userId, conversationId, role, queryType, message, contextLeadIds = null, structuredPayload = null) {
     try {
       await pool.query(`
         INSERT INTO ai_copilot_messages (
-          user_id, role, query_type, message, context_lead_ids, structured_payload
-        ) VALUES (?, ?, ?, ?, ?, ?)
+          user_id, conversation_id, role, query_type, message, context_lead_ids, structured_payload
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
       `, [
         userId || 1,
+        conversationId || null,
         role,
         queryType || 'custom',
         message,
@@ -428,16 +572,21 @@ ${crmContextText}`;
   }
 
   /**
-   * Fetch chat history for user
+   * Fetch chat history for user and conversation
    */
-  async getChatHistory(userId, limit = 40) {
-    const [rows] = await pool.query(`
-      SELECT id, role, query_type, message, structured_payload, created_at
-      FROM ai_copilot_messages
-      WHERE user_id = ?
-      ORDER BY id ASC
-      LIMIT ?
-    `, [userId || 1, Number(limit)]);
+  async getChatHistory(userId, conversationId = null, limit = 60) {
+    let sql = 'SELECT id, conversation_id, role, query_type, message, structured_payload, created_at FROM ai_copilot_messages WHERE user_id = ?';
+    const params = [userId || 1];
+
+    if (conversationId) {
+      sql += ' AND conversation_id = ?';
+      params.push(conversationId);
+    }
+
+    sql += ' ORDER BY id ASC LIMIT ?';
+    params.push(Number(limit));
+
+    const [rows] = await pool.query(sql, params);
 
     return rows.map((r) => {
       let payload = null;
@@ -447,6 +596,7 @@ ${crmContextText}`;
 
       return {
         id: r.id,
+        conversation_id: r.conversation_id,
         role: r.role,
         query_type: r.query_type,
         message: r.message,
@@ -457,11 +607,17 @@ ${crmContextText}`;
   }
 
   /**
-   * Clear chat history
+   * Clear chat history (specific conversation or all)
    */
-  async clearChatHistory(userId) {
+  async clearChatHistory(userId, conversationId = null) {
+    if (conversationId) {
+      await pool.query('DELETE FROM ai_copilot_messages WHERE user_id = ? AND conversation_id = ?', [userId || 1, conversationId]);
+      await pool.query('DELETE FROM ai_copilot_conversations WHERE user_id = ? AND id = ?', [userId || 1, conversationId]);
+      return { success: true, message: 'Conversation deleted' };
+    }
     await pool.query('DELETE FROM ai_copilot_messages WHERE user_id = ?', [userId || 1]);
-    return { success: true, message: 'Chat history cleared' };
+    await pool.query('DELETE FROM ai_copilot_conversations WHERE user_id = ?', [userId || 1]);
+    return { success: true, message: 'All chat history cleared' };
   }
 }
 

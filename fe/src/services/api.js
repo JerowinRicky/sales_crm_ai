@@ -358,9 +358,12 @@ export const aiGatewayAPI = {
 export const aiCopilotAPI = {
   getRagSettings: () => api.get('/ai/rag/settings'),
   updateRagSettings: (data) => api.put('/ai/rag/settings', data),
+  getConversations: () => api.get('/ai/rag/conversations'),
+  createConversation: (data) => api.post('/ai/rag/conversations', data),
+  deleteConversation: (id) => api.delete(`/ai/rag/conversations/${id}`),
   query: (data) => api.post('/ai/rag/query', data),
-  getHistory: () => api.get('/ai/rag/history'),
-  clearHistory: () => api.delete('/ai/rag/history'),
+  getHistory: (params) => api.get('/ai/rag/history', { params }),
+  clearHistory: (params) => api.delete('/ai/rag/history', { params }),
 };
 
 export default api;

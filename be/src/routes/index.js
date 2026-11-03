@@ -338,6 +338,9 @@ router.post('/ai/gateway/test-connection', authenticate, requireAdmin, aiGateway
 const aiRagController = require('../controllers/aiRagController');
 router.get('/ai/rag/settings', authenticate, requireManager, aiRagController.getSettings);
 router.put('/ai/rag/settings', authenticate, requireAdmin, aiRagController.updateSettings);
+router.get('/ai/rag/conversations', authenticate, aiRagController.getConversations);
+router.post('/ai/rag/conversations', authenticate, aiRagController.createConversation);
+router.delete('/ai/rag/conversations/:id', authenticate, aiRagController.deleteConversation);
 router.post('/ai/rag/query', authenticate, aiRagController.queryCopilot);
 router.get('/ai/rag/history', authenticate, aiRagController.getChatHistory);
 router.delete('/ai/rag/history', authenticate, aiRagController.clearChatHistory);

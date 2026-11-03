@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Sparkles,
@@ -10,25 +10,24 @@ import {
   HelpCircle,
   Building2,
   Trash2,
-  ExternalLink,
   Bot,
   User,
   ShieldCheck,
   ChevronRight,
-  Phone,
   Clock,
-  ArrowRight,
-  Search,
   Globe,
-  Layers,
+  Plus,
+  History,
+  MessageSquare,
+  ChevronLeft,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { aiCopilotAPI } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 
 /**
- * Elegant inline markdown parser that renders headers, bold, italics, bullets,
- * blockquotes, code, and clickable CRM links without raw markdown characters like * or ###.
+ * Clean inline markdown parser that strips raw markdown characters like * and ###,
+ * rendering styled headers, bold text, italics, bullet lists, blockquotes, and links.
  */
 function renderInlineMarkdown(text, navigate) {
   if (!text) return null;
@@ -173,54 +172,111 @@ export default function LeadAiCopilotDrawer({ isOpen, onClose }) {
   const navigate = useNavigate();
   const messagesEndRef = useRef(null);
 
+  // Conversations & Chat State
+  const [conversations, setConversations] = useState([]);
+  const [activeConvId, setActiveConvId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [inputPrompt, setInputPrompt] = useState('');
   const [loading, setLoading] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [ragSettings, setRagSettings] = useState(null);
 
-  // Load chat history & RAG settings when drawer opens
-  useEffect(() => {
-    if (isOpen) {
-      loadHistory();
-      loadSettings();
+  const isSalesManager = user?.role_name === 'sales_manager';
+  const isAdmin = user?.role_name === 'admin';
+
+  // Load conversations list and RAG settings when drawer opens
+  const loadConversations = useCallback(async () => {
+    try {
+      const res = await aiCopilotAPI.getConversations();
+      if (res?.data) {
+        setConversations(res.data);
+      }
+    } catch (_) {}
+  }, []);
+
+  const loadHistory = useCallback(async (convId = null) => {
+    try {
+      const res = await aiCopilotAPI.getHistory({ conversation_id: convId });
+      if (res?.data && res.data.length > 0) {
+        setMessages(res.data);
+      } else {
+        setMessages([]);
+      }
+    } catch (_) {
+      setMessages([]);
     }
-  }, [isOpen]);
+  }, []);
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages, loading]);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  const loadSettings = async () => {
+  const loadSettings = useCallback(async () => {
     try {
       const res = await aiCopilotAPI.getRagSettings();
       if (res?.data) setRagSettings(res.data);
     } catch (_) {}
-  };
+  }, []);
 
-  const loadHistory = async () => {
-    try {
-      const res = await aiCopilotAPI.getHistory();
-      if (res?.data && res.data.length > 0) {
-        setMessages(res.data);
-      } else {
-        // Welcome message with guided options
-        setMessages([
-          {
-            id: 'welcome',
-            role: 'assistant',
-            query_type: 'welcome',
-            message:
-              'Hello! I am your **SalesCRM AI Copilot**. I am strictly grounded in your **CRM Application Data** to analyze deal velocity, identify high-priority hot leads, determine next engagement steps, and provide company intelligence.',
-          },
-        ]);
+  useEffect(() => {
+    if (isOpen) {
+      loadSettings();
+      loadConversations();
+      // If we don't have an active conversation selected, start fresh or load most recent
+      if (!activeConvId) {
+        loadHistory(null);
       }
-    } catch (_) {}
+    }
+  }, [isOpen, activeConvId, loadConversations, loadHistory, loadSettings]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, loading]);
+
+  // Start a new chat session
+  const handleNewChat = () => {
+    setActiveConvId(null);
+    setMessages([]);
+    setHistoryOpen(false);
+    setInputPrompt('');
   };
 
+  // Switch to an existing conversation
+  const handleSelectConversation = (convId) => {
+    setActiveConvId(convId);
+    loadHistory(convId);
+    setHistoryOpen(false);
+  };
+
+  // Delete a specific conversation
+  const handleDeleteConversation = async (convId, e) => {
+    e.stopPropagation();
+    if (!window.confirm('Delete this chat conversation?')) return;
+
+    try {
+      await aiCopilotAPI.deleteConversation(convId);
+      toast.success('Conversation deleted');
+      loadConversations();
+      if (activeConvId === convId) {
+        handleNewChat();
+      }
+    } catch (err) {
+      toast.error('Failed to delete conversation');
+    }
+  };
+
+  // Clear all conversations for current user
+  const handleClearAll = async () => {
+    if (!window.confirm('Clear all your chat history? This cannot be undone.')) return;
+
+    try {
+      await aiCopilotAPI.clearHistory();
+      setConversations([]);
+      setMessages([]);
+      setActiveConvId(null);
+      toast.success('Chat history cleared');
+    } catch (err) {
+      toast.error('Failed to clear history');
+    }
+  };
+
+  // Send message
   const handleSend = async (customText, queryType = 'custom') => {
     const textToSend = customText || inputPrompt;
     if (!textToSend.trim() || loading) return;
@@ -238,6 +294,7 @@ export default function LeadAiCopilotDrawer({ isOpen, onClose }) {
 
     try {
       const res = await aiCopilotAPI.query({
+        conversation_id: activeConvId,
         query_type: queryType,
         prompt: textToSend,
       });
@@ -251,6 +308,12 @@ export default function LeadAiCopilotDrawer({ isOpen, onClose }) {
           structured_payload: res.data.cards,
         };
         setMessages((prev) => [...prev, aiMsg]);
+
+        // If a new conversation was created on the backend, update activeConvId and reload conversation list
+        if (res.data.conversation_id && res.data.conversation_id !== activeConvId) {
+          setActiveConvId(res.data.conversation_id);
+          loadConversations();
+        }
       }
     } catch (err) {
       toast.error(err.message || 'Error processing AI query');
@@ -259,7 +322,7 @@ export default function LeadAiCopilotDrawer({ isOpen, onClose }) {
         {
           id: Date.now() + 1,
           role: 'assistant',
-          message: '⚠️ Sorry, I encountered an issue querying CRM application data. Please verify your connection.',
+          message: '⚠️ Sorry, an error occurred while processing your request. Please verify your connection.',
         },
       ]);
     } finally {
@@ -267,145 +330,255 @@ export default function LeadAiCopilotDrawer({ isOpen, onClose }) {
     }
   };
 
-  const handleClear = async () => {
-    try {
-      await aiCopilotAPI.clearHistory();
-      setMessages([
-        {
-          id: 'welcome',
-          role: 'assistant',
-          query_type: 'welcome',
-          message: 'Chat history cleared. How can I assist your sales pipeline today?',
-        },
-      ]);
-      toast.success('Chat history cleared');
-    } catch (err) {
-      toast.error('Failed to clear history');
-    }
-  };
-
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden bg-black/30 backdrop-blur-xs flex justify-end">
-      <div className="w-full max-w-xl bg-white h-full shadow-2xl flex flex-col animate-in slide-in-from-right duration-200">
-        {/* Top Header */}
+      <div className="w-full max-w-xl bg-white h-full shadow-2xl flex flex-col animate-in slide-in-from-right duration-200 relative">
+        {/* Header Bar */}
         <div className="p-4 border-b border-gray-200 bg-white flex items-center justify-between shadow-xs">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-xs">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-xs shrink-0">
               <Sparkles size={18} />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="text-sm font-bold text-gray-900">SalesCRM AI Copilot</h3>
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
                   <ShieldCheck size={11} />
-                  Grounded RAG
+                  {isSalesManager ? 'Domain Scoped' : isAdmin ? 'Admin Grounding' : 'My Leads'}
                 </span>
               </div>
               <p className="text-[11px] text-gray-500">
-                Answering only from CRM Application Data & Web Search
+                {isSalesManager
+                  ? 'Strictly scoped to your assigned domain leads and team'
+                  : 'Answering strictly from CRM Application Data'}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5">
+            {/* New Chat Button */}
             <button
               type="button"
-              onClick={handleClear}
-              title="Clear Chat History"
-              className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition"
+              onClick={handleNewChat}
+              title="Start a new chat"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-semibold transition cursor-pointer"
             >
-              <Trash2 size={16} />
+              <Plus size={14} />
+              <span>New Chat</span>
             </button>
+
+            {/* History Toggle Button */}
+            <button
+              type="button"
+              onClick={() => setHistoryOpen(!historyOpen)}
+              title="View past conversations"
+              className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer ${
+                historyOpen
+                  ? 'bg-gray-200 text-gray-900'
+                  : 'text-gray-600 hover:bg-gray-100 border border-gray-200'
+              }`}
+            >
+              <History size={14} />
+              <span>{conversations.length}</span>
+            </button>
+
+            {/* Close Drawer */}
             <button
               type="button"
               onClick={onClose}
-              className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition"
+              className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition cursor-pointer"
             >
               <X size={18} />
             </button>
           </div>
         </div>
 
-        {/* Quick Search Action Buttons (READY TO CLICK) */}
-        <div className="p-3 bg-gray-50/90 border-b border-gray-200">
-          <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-2">
-            Ready One-Click Intelligence
+        {/* History Slide-Out Panel */}
+        {historyOpen && (
+          <div className="absolute inset-x-0 top-[73px] bottom-0 z-30 bg-white/95 backdrop-blur-md flex flex-col border-b border-gray-200 shadow-xl animate-in fade-in duration-150">
+            <div className="p-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/80">
+              <div className="flex items-center gap-2">
+                <History size={16} className="text-gray-600" />
+                <h4 className="text-xs font-bold text-gray-900 uppercase tracking-wide">
+                  Your Chat History ({conversations.length})
+                </h4>
+              </div>
+              <div className="flex items-center gap-2">
+                {conversations.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleClearAll}
+                    className="text-[11px] text-red-600 hover:text-red-700 font-medium hover:underline cursor-pointer"
+                  >
+                    Clear All
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setHistoryOpen(false)}
+                  className="p-1 rounded text-gray-400 hover:text-gray-600 cursor-pointer"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
+              {conversations.length === 0 ? (
+                <div className="py-12 text-center text-gray-400 space-y-2">
+                  <MessageSquare size={32} className="mx-auto text-gray-300" />
+                  <p className="text-xs">No previous chat history found.</p>
+                  <button
+                    type="button"
+                    onClick={handleNewChat}
+                    className="text-xs text-blue-600 font-semibold hover:underline"
+                  >
+                    Start a new conversation
+                  </button>
+                </div>
+              ) : (
+                conversations.map((c) => {
+                  const isActive = c.id === activeConvId;
+                  return (
+                    <div
+                      key={c.id}
+                      onClick={() => handleSelectConversation(c.id)}
+                      className={`p-3 rounded-xl border transition flex items-center justify-between cursor-pointer group ${
+                        isActive
+                          ? 'bg-blue-50 border-blue-200 shadow-xs'
+                          : 'bg-white hover:bg-gray-50 border-gray-200'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 overflow-hidden">
+                        <MessageSquare
+                          size={15}
+                          className={isActive ? 'text-blue-600' : 'text-gray-400'}
+                        />
+                        <div className="overflow-hidden">
+                          <div
+                            className={`text-xs font-semibold truncate ${
+                              isActive ? 'text-blue-900' : 'text-gray-800 group-hover:text-gray-900'
+                            }`}
+                          >
+                            {c.title || 'Conversation'}
+                          </div>
+                          <div className="text-[10px] text-gray-400 flex items-center gap-1.5 mt-0.5">
+                            <span>{new Date(c.updated_at).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                            <span>•</span>
+                            <span>{c.message_count || 0} messages</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={(e) => handleDeleteConversation(c.id, e)}
+                        title="Delete chat"
+                        className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition shrink-0 cursor-pointer"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => handleSend('AI should identify hot lead', 'hot_leads')}
-              disabled={loading}
-              className="flex items-center gap-2 p-2.5 bg-white border border-orange-200 hover:border-orange-300 hover:bg-orange-50/50 rounded-lg text-left transition shadow-xs group cursor-pointer disabled:opacity-50"
-            >
-              <div className="w-7 h-7 rounded-md bg-orange-100 text-orange-600 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                <Flame size={15} />
-              </div>
-              <div className="overflow-hidden">
-                <div className="text-xs font-bold text-gray-900 group-hover:text-orange-700 leading-tight">
-                  Identify Hot Leads
-                </div>
-                <div className="text-[10px] text-gray-500 truncate">Lead scoring & quality ranking</div>
-              </div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleSend('AI should tell what should be next engagement to do and when', 'next_engagement')}
-              disabled={loading}
-              className="flex items-center gap-2 p-2.5 bg-white border border-blue-200 hover:border-blue-300 hover:bg-blue-50/50 rounded-lg text-left transition shadow-xs group cursor-pointer disabled:opacity-50"
-            >
-              <div className="w-7 h-7 rounded-md bg-blue-100 text-blue-600 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                <CalendarClock size={15} />
-              </div>
-              <div className="overflow-hidden">
-                <div className="text-xs font-bold text-gray-900 group-hover:text-blue-700 leading-tight">
-                  Next Engagement & Timing
-                </div>
-                <div className="text-[10px] text-gray-500 truncate">What to do & optimal schedule</div>
-              </div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleSend('Tell why leads went interested or not interested with company reasons', 'qualification_reasoning')}
-              disabled={loading}
-              className="flex items-center gap-2 p-2.5 bg-white border border-emerald-200 hover:border-emerald-300 hover:bg-emerald-50/50 rounded-lg text-left transition shadow-xs group cursor-pointer disabled:opacity-50"
-            >
-              <div className="w-7 h-7 rounded-md bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                <HelpCircle size={15} />
-              </div>
-              <div className="overflow-hidden">
-                <div className="text-xs font-bold text-gray-900 group-hover:text-emerald-700 leading-tight">
-                  Qualification Reasons
-                </div>
-                <div className="text-[10px] text-gray-500 truncate">Why interested vs not interested</div>
-              </div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleSend('Analyze high scoring leads and provide company intelligence', 'hot_leads')}
-              disabled={loading}
-              className="flex items-center gap-2 p-2.5 bg-white border border-indigo-200 hover:border-indigo-300 hover:bg-indigo-50/50 rounded-lg text-left transition shadow-xs group cursor-pointer disabled:opacity-50"
-            >
-              <div className="w-7 h-7 rounded-md bg-indigo-100 text-indigo-600 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                <Building2 size={15} />
-              </div>
-              <div className="overflow-hidden">
-                <div className="text-xs font-bold text-gray-900 group-hover:text-indigo-700 leading-tight">
-                  Company Intelligence
-                </div>
-                <div className="text-[10px] text-gray-500 truncate">Enriched with outside search</div>
-              </div>
-            </button>
-          </div>
-        </div>
+        )}
 
         {/* Message Stream */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50/50">
+          {/* Welcome Screen if no messages in active chat */}
+          {messages.length === 0 && (
+            <div className="py-6 flex flex-col items-center text-center space-y-4">
+              <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center shadow-md">
+                <Sparkles size={24} />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-gray-900">How can I assist your pipeline today?</h4>
+                <p className="text-xs text-gray-500 max-w-sm mx-auto mt-1">
+                  {isSalesManager
+                    ? 'I am strictly authorized to analyze and search leads for your assigned domain team.'
+                    : 'Grounded strictly in your CRM database records to identify hot leads and guide follow-ups.'}
+                </p>
+              </div>
+
+              {/* Ready One-Click Search Chips */}
+              <div className="w-full grid grid-cols-1 sm:grid-cols-2 gap-2 text-left pt-2">
+                <button
+                  type="button"
+                  onClick={() => handleSend('AI should identify hot lead', 'hot_leads')}
+                  disabled={loading}
+                  className="flex items-center gap-2.5 p-3 bg-white border border-gray-200 hover:border-orange-300 hover:bg-orange-50/40 rounded-xl transition shadow-2xs group cursor-pointer text-left"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-orange-100 text-orange-600 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                    <Flame size={16} />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-gray-900 group-hover:text-orange-700">
+                      Identify Hot Leads
+                    </div>
+                    <div className="text-[10px] text-gray-500">Quality score & deal velocity</div>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSend('AI should tell what should be next engagement to do and when', 'next_engagement')}
+                  disabled={loading}
+                  className="flex items-center gap-2.5 p-3 bg-white border border-gray-200 hover:border-blue-300 hover:bg-blue-50/40 rounded-xl transition shadow-2xs group cursor-pointer text-left"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                    <CalendarClock size={16} />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-gray-900 group-hover:text-blue-700">
+                      Next Best Engagement
+                    </div>
+                    <div className="text-[10px] text-gray-500">What action to do & when</div>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSend('Tell why leads went interested or not interested with company reasons', 'qualification_reasoning')}
+                  disabled={loading}
+                  className="flex items-center gap-2.5 p-3 bg-white border border-gray-200 hover:border-emerald-300 hover:bg-emerald-50/40 rounded-xl transition shadow-2xs group cursor-pointer text-left"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                    <HelpCircle size={16} />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-gray-900 group-hover:text-emerald-700">
+                      Qualification Reasons
+                    </div>
+                    <div className="text-[10px] text-gray-500">Why interested vs not interested</div>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSend('Analyze high scoring leads and provide company intelligence', 'hot_leads')}
+                  disabled={loading}
+                  className="flex items-center gap-2.5 p-3 bg-white border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/40 rounded-xl transition shadow-2xs group cursor-pointer text-left"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                    <Building2 size={16} />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-gray-900 group-hover:text-indigo-700">
+                      Company Intelligence
+                    </div>
+                    <div className="text-[10px] text-gray-500">Outside market context</div>
+                  </div>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Messages */}
           {messages.map((m) => {
             const isUser = m.role === 'user';
             const cards = m.structured_payload || [];
@@ -413,7 +586,7 @@ export default function LeadAiCopilotDrawer({ isOpen, onClose }) {
             return (
               <div key={m.id} className={`flex gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}>
                 {!isUser && (
-                  <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
+                  <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
                     <Bot size={16} />
                   </div>
                 )}
@@ -432,8 +605,9 @@ export default function LeadAiCopilotDrawer({ isOpen, onClose }) {
                   {/* Render Lead Cards inside AI Responses */}
                   {!isUser && cards && cards.length > 0 && (
                     <div className="space-y-2 pt-1">
-                      <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
-                        CRM Lead Records ({cards.length})
+                      <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
+                        <Building2 size={12} className="text-gray-400" />
+                        <span>CRM Lead Records ({cards.length})</span>
                       </div>
                       <div className="grid grid-cols-1 gap-2">
                         {cards.slice(0, 5).map((card) => (
@@ -453,7 +627,12 @@ export default function LeadAiCopilotDrawer({ isOpen, onClose }) {
                                 </div>
                                 <div className="text-[11px] text-gray-500 font-medium mt-0.5 flex items-center gap-1.5">
                                   <Building2 size={12} className="text-gray-400" />
-                                  {card.company || 'Corporate Client'}
+                                  <span>{card.company || 'Corporate Client'}</span>
+                                  {card.domain_name && (
+                                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-gray-100 text-gray-600">
+                                      {card.domain_name}
+                                    </span>
+                                  )}
                                 </div>
                               </div>
 
@@ -463,37 +642,6 @@ export default function LeadAiCopilotDrawer({ isOpen, onClose }) {
                                 </span>
                               )}
                             </div>
-
-                            {/* Hot Reason or Next Engagement Action */}
-                            {card.hot_reason && (
-                              <p className="text-[11px] text-gray-600 bg-gray-50 p-2 rounded-lg mt-2 border border-gray-100 line-clamp-2">
-                                🔥 {card.hot_reason}
-                              </p>
-                            )}
-
-                            {card.recommended_action && (
-                              <div className="mt-2 p-2 bg-blue-50/70 border border-blue-100 rounded-lg text-[11px] space-y-1">
-                                <div className="font-semibold text-blue-900 flex items-center gap-1">
-                                  <span>Action:</span> {card.recommended_action}
-                                </div>
-                                <div className="text-blue-700 flex items-center gap-1 font-medium">
-                                  <Clock size={11} /> {card.recommended_timing}
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Outside Company Intelligence */}
-                            {card.external_intelligence && (
-                              <div className="mt-2 p-2 bg-indigo-50/70 border border-indigo-100 rounded-lg text-[11px] space-y-1">
-                                <div className="font-semibold text-indigo-900 flex items-center gap-1">
-                                  <Globe size={11} className="text-indigo-600" />
-                                  <span>Company Market Signal:</span>
-                                </div>
-                                <p className="text-indigo-800 line-clamp-2">
-                                  {card.external_intelligence}
-                                </p>
-                              </div>
-                            )}
                           </div>
                         ))}
                       </div>
@@ -512,17 +660,47 @@ export default function LeadAiCopilotDrawer({ isOpen, onClose }) {
 
           {loading && (
             <div className="flex gap-3 justify-start">
-              <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs">
                 <Bot size={16} />
               </div>
               <div className="p-3.5 bg-white border border-gray-200 rounded-2xl rounded-bl-xs shadow-xs text-xs text-gray-500 flex items-center gap-2">
                 <RefreshCw size={14} className="animate-spin text-blue-600" />
-                <span>Searching CRM Application Data & analyzing deal signals...</span>
+                <span>Searching domain CRM records and formulating answer...</span>
               </div>
             </div>
           )}
           <div ref={messagesEndRef} />
         </div>
+
+        {/* Floating Quick Chips above Input if conversation active */}
+        {messages.length > 0 && (
+          <div className="px-3 py-1.5 bg-gray-50 border-t border-gray-100 flex items-center gap-1.5 overflow-x-auto text-xs shrink-0">
+            <button
+              type="button"
+              onClick={() => handleSend('AI should identify hot lead', 'hot_leads')}
+              className="px-2.5 py-1 bg-white border border-gray-200 hover:border-orange-300 rounded-full text-[11px] font-medium text-gray-700 hover:text-orange-700 whitespace-nowrap cursor-pointer flex items-center gap-1"
+            >
+              <Flame size={12} className="text-orange-500" />
+              <span>Hot Leads</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSend('AI should tell what should be next engagement to do and when', 'next_engagement')}
+              className="px-2.5 py-1 bg-white border border-gray-200 hover:border-blue-300 rounded-full text-[11px] font-medium text-gray-700 hover:text-blue-700 whitespace-nowrap cursor-pointer flex items-center gap-1"
+            >
+              <CalendarClock size={12} className="text-blue-500" />
+              <span>Next Action</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSend('Tell why leads went interested or not interested with company reasons', 'qualification_reasoning')}
+              className="px-2.5 py-1 bg-white border border-gray-200 hover:border-emerald-300 rounded-full text-[11px] font-medium text-gray-700 hover:text-emerald-700 whitespace-nowrap cursor-pointer flex items-center gap-1"
+            >
+              <HelpCircle size={12} className="text-emerald-500" />
+              <span>Interested vs Not</span>
+            </button>
+          </div>
+        )}
 
         {/* Bottom Input Box */}
         <div className="p-3 bg-white border-t border-gray-200">
@@ -538,8 +716,12 @@ export default function LeadAiCopilotDrawer({ isOpen, onClose }) {
                 type="text"
                 value={inputPrompt}
                 onChange={(e) => setInputPrompt(e.target.value)}
-                placeholder="Ask AI Copilot about leads, stages, follow-ups..."
-                className="w-full pl-3 pr-10 py-2.5 text-xs bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 text-gray-800 shadow-2xs"
+                placeholder={
+                  isSalesManager
+                    ? 'Ask about your domain leads, next engagements, or team...'
+                    : 'Ask AI Copilot about leads, stages, follow-ups...'
+                }
+                className="w-full pl-3.5 pr-10 py-2.5 text-xs bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 text-gray-800 shadow-2xs"
               />
             </div>
             <button
@@ -551,11 +733,10 @@ export default function LeadAiCopilotDrawer({ isOpen, onClose }) {
             </button>
           </form>
           <div className="text-[10px] text-gray-400 text-center mt-1.5 flex items-center justify-center gap-1">
-            <span>Powered by RAG • Strictly Grounded in CRM Database</span>
+            <span>Powered by RAG • {isSalesManager ? 'Strictly Scoped to Manager Domain' : 'Strictly Grounded in CRM Data'}</span>
           </div>
         </div>
       </div>
     </div>
   );
 }
-
