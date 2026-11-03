@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import toast from "react-hot-toast";
 import {
   Sparkles,
@@ -23,90 +23,369 @@ import {
   Check,
   Building2,
   Users,
+  Eye,
+  EyeOff,
+  History,
+  RotateCcw,
+  ShieldCheck,
+  Globe,
+  Sliders,
+  Terminal,
+  ChevronDown,
+  ChevronUp,
+  X,
 } from "lucide-react";
+import { aiGatewayAPI } from "../../services/api";
+import { useAuth } from "../../context/AuthContext";
+
+// Presets for LLM Providers
+const LLM_PRESETS = [
+  {
+    id: "gemini",
+    name: "Google Gemini",
+    baseUrl: "https://generativelanguage.googleapis.com",
+    models: ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.0-pro"],
+  },
+  {
+    id: "openai",
+    name: "OpenAI",
+    baseUrl: "https://api.openai.com/v1",
+    models: ["gpt-4o", "gpt-4o-mini", "o1-preview", "gpt-4-turbo"],
+  },
+  {
+    id: "anthropic",
+    name: "Anthropic Claude",
+    baseUrl: "https://api.anthropic.com/v1",
+    models: ["claude-3-5-sonnet-20241022", "claude-3-opus-20240229", "claude-3-haiku-20240307"],
+  },
+  {
+    id: "deepseek",
+    name: "DeepSeek",
+    baseUrl: "https://api.deepseek.com/v1",
+    models: ["deepseek-chat", "deepseek-coder", "deepseek-reasoner"],
+  },
+  {
+    id: "groq",
+    name: "Groq (High-Speed LPU)",
+    baseUrl: "https://api.groq.com/openai/v1",
+    models: ["llama-3.3-70b-versatile", "mixtral-8x7b-32768", "gemma2-9b-it"],
+  },
+  {
+    id: "ollama",
+    name: "Ollama (Self-Hosted / Local)",
+    baseUrl: "http://localhost:11434/v1",
+    models: ["llama3.1:latest", "mistral:latest", "qwen2.5:latest"],
+  },
+  {
+    id: "custom",
+    name: "Custom / Self-Hosted Endpoint",
+    baseUrl: "https://your-custom-llm-proxy.com/v1",
+    models: ["custom-model-id"],
+  },
+];
+
+// Presets for WhatsApp Gateways
+const WHATSAPP_PRESETS = [
+  {
+    id: "meta",
+    name: "Meta WhatsApp Cloud API (Official)",
+    endpoint: "https://graph.facebook.com/v19.0",
+  },
+  {
+    id: "gupshup",
+    name: "Gupshup Enterprise Messaging",
+    endpoint: "https://api.gupshup.io/sm/api/v1",
+  },
+  {
+    id: "twilio",
+    name: "Twilio WhatsApp API",
+    endpoint: "https://api.twilio.com/2010-04-01",
+  },
+  {
+    id: "infobip",
+    name: "Infobip WhatsApp Business API",
+    endpoint: "https://api.infobip.com/whatsapp/1",
+  },
+  {
+    id: "custom",
+    name: "Custom Webhook / Internal API Gateway",
+    endpoint: "https://api.yourdomain.com/whatsapp",
+  },
+];
+
+// Presets for Telephony / Voice Providers
+const TELEPHONY_PRESETS = [
+  {
+    id: "exotel",
+    name: "Exotel (India Cloud Telephony)",
+    baseUrl: "https://api.exotel.com/v1",
+    defaultVoice: "en-IN-Wavenet-B",
+  },
+  {
+    id: "twilio",
+    name: "Twilio Voice",
+    baseUrl: "https://api.twilio.com/2010-04-01",
+    defaultVoice: "Polly.Aditi",
+  },
+  {
+    id: "bland_ai",
+    name: "Bland AI (Autonomous Voice Calling)",
+    baseUrl: "https://api.bland.ai/v1/calls",
+    defaultVoice: "maya-conversational",
+  },
+  {
+    id: "vapi",
+    name: "Vapi Voice AI Platform",
+    baseUrl: "https://api.vapi.ai",
+    defaultVoice: "josh",
+  },
+  {
+    id: "retell",
+    name: "Retell AI",
+    baseUrl: "https://api.retellai.com/v2",
+    defaultVoice: "11labs-Adrian",
+  },
+  {
+    id: "custom",
+    name: "Custom SIP Trunk / Webhook Gateway",
+    baseUrl: "https://telephony.yourcompany.com",
+    defaultVoice: "custom-agent",
+  },
+];
 
 export default function AiSettingsPage() {
-  const [tab, setTab] = useState("overview");
+  const { user } = useAuth();
+  const [tab, setTab] = useState("engine"); // default to Model & Gateway as requested
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  // Configuration State
-  const [config, setConfig] = useState({
-    // General
-    ai_enabled: true,
-    model_provider: "gemini-1.5-pro",
+  // Gateway Settings State
+  const [gatewayConfig, setGatewayConfig] = useState({
+    current_version: 1,
 
-    // Hot Lead Identification & Scoring
-    hot_lead_threshold: 80,
-    warm_lead_threshold: 50,
-    scoring_weights: {
-      budget_match: 25,
-      decision_maker_role: 25,
-      timeline_urgency: 20,
-      engagement_velocity: 15,
-      industry_fit: 15,
-    },
-    auto_rank_leads: true,
+    // LLM
+    llm_provider: "gemini",
+    llm_model: "gemini-1.5-pro",
+    llm_api_key: "",
+    llm_api_key_configured: false,
+    llm_base_url: "https://generativelanguage.googleapis.com",
+    llm_temperature: 0.7,
+    llm_max_tokens: 2048,
+    llm_timeout_seconds: 30,
+    llm_custom_headers: "",
 
-    // Next Best Engagement
-    suggest_next_action: true,
-    action_timing_window_hours: 4,
-    recommended_channels: ["whatsapp", "phone", "email"],
+    // WhatsApp
+    whatsapp_provider: "meta",
+    whatsapp_phone_number_id: "",
+    whatsapp_business_account_id: "",
+    whatsapp_api_key: "",
+    whatsapp_api_key_configured: false,
+    whatsapp_api_endpoint: "https://graph.facebook.com/v19.0",
+    whatsapp_webhook_url: "",
+    whatsapp_webhook_verify_token: "",
+    whatsapp_webhook_verify_token_configured: false,
 
-    // Head & MD Escalation
-    escalate_to_head: true,
-    escalate_to_md: true,
-    missed_lead_sla_minutes: 30,
-    escalation_channel: "whatsapp",
-    md_whatsapp_number: "+91 98765 43210",
-    head_whatsapp_fallback: "+91 98765 00000",
-    escalation_message_template:
-      "🔥 HOT LEAD ALERT (AI Qualified)\nLead: {{lead_name}} (Score: {{lead_score}}/100)\nCompany: {{company_name}}\nReason: {{hot_reason}}\nAssigned To: {{sales_manager}}\n⚠️ SLA: No action taken in {{sla_window}} mins. Immediate intervention requested.",
-
-    // AI Calling & Qualification
-    voice_ai_enabled: true,
-    calling_channel_mobile: true,
-    calling_channel_whatsapp: true,
-    ai_voice_name: "Aria (Professional Sales Voice)",
-    max_call_retries: 3,
-    auto_log_reasons: true,
-    require_interest_explanation: true,
-    require_disinterest_explanation: true,
-
-    // Best Sales Manager Assignment
-    smart_assignment_enabled: true,
-    assignment_strategy: "best_performer", // best_performer, territory_matched, round_robin
-    match_domain_expertise: true,
-    balance_manager_workload: true,
-
-    // Lookalike Audience
-    lookalike_enabled: true,
-    lookalike_min_score: 85,
-    auto_find_lookalikes: true,
-    auto_enrich_phone_numbers: true,
-    auto_outbound_call_lookalikes: false,
-    daily_lookalike_quota: 50,
+    // Telephony
+    telephony_provider: "exotel",
+    telephony_account_sid: "",
+    telephony_auth_token: "",
+    telephony_auth_token_configured: false,
+    telephony_caller_id: "+919000000000",
+    telephony_base_url: "https://api.exotel.com/v1",
+    telephony_voice_id: "en-IN-Wavenet-B",
+    telephony_max_call_duration_seconds: 300,
   });
 
-  const handleToggle = (key) => {
-    setConfig((prev) => ({ ...prev, [key]: !prev[key] }));
+  // UI state for inputs (toggle manual entry vs dropdown)
+  const [customModelMode, setCustomModelMode] = useState(false);
+  const [showKeys, setShowKeys] = useState({
+    llm: false,
+    whatsapp: false,
+    whatsappVerify: false,
+    telephony: false,
+  });
+
+  // Test Connection status
+  const [testing, setTesting] = useState({
+    llm: false,
+    whatsapp: false,
+    telephony: false,
+  });
+  const [testResult, setTestResult] = useState({
+    llm: null,
+    whatsapp: null,
+    telephony: null,
+  });
+
+  // History & Audit Log State
+  const [historyList, setHistoryList] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [expandedDiffs, setExpandedDiffs] = useState({});
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [changeReason, setChangeReason] = useState("");
+  const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
+
+  // Load gateway settings from backend
+  const loadGatewaySettings = useCallback(async () => {
+    try {
+      setLoading(true);
+      const res = await aiGatewayAPI.getSettings();
+      if (res?.data) {
+        setGatewayConfig(res.data);
+        // check if current model is outside default preset list
+        const currentPreset = LLM_PRESETS.find((p) => p.id === res.data.llm_provider);
+        if (currentPreset && !currentPreset.models.includes(res.data.llm_model)) {
+          setCustomModelMode(true);
+        }
+      }
+    } catch (err) {
+      console.error("Error loading AI gateway settings:", err);
+      toast.error("Failed to load AI gateway configuration from server");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Load audit history
+  const loadHistory = useCallback(async () => {
+    try {
+      setHistoryLoading(true);
+      const res = await aiGatewayAPI.getHistory({ limit: 50, page: 1 });
+      if (res?.items) {
+        setHistoryList(res.items);
+      }
+    } catch (err) {
+      console.error("Error loading AI gateway history:", err);
+      toast.error("Failed to load audit history");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadGatewaySettings();
+    loadHistory();
+  }, [loadGatewaySettings, loadHistory]);
+
+  // Handle LLM Provider Dropdown Change
+  const handleLlmProviderChange = (providerId) => {
+    const preset = LLM_PRESETS.find((p) => p.id === providerId);
+    if (!preset) return;
+
+    setGatewayConfig((prev) => ({
+      ...prev,
+      llm_provider: providerId,
+      llm_model: preset.models[0] || "custom-model",
+      llm_base_url: preset.baseUrl,
+    }));
+    setCustomModelMode(providerId === "custom");
   };
 
-  const handleWeightChange = (key, val) => {
-    setConfig((prev) => ({
+  // Handle WhatsApp Provider Dropdown Change
+  const handleWhatsappProviderChange = (providerId) => {
+    const preset = WHATSAPP_PRESETS.find((p) => p.id === providerId);
+    if (!preset) return;
+
+    setGatewayConfig((prev) => ({
       ...prev,
-      scoring_weights: {
-        ...prev.scoring_weights,
-        [key]: parseInt(val, 10) || 0,
-      },
+      whatsapp_provider: providerId,
+      whatsapp_api_endpoint: preset.endpoint,
     }));
   };
 
-  const handleSave = () => {
+  // Handle Telephony Provider Dropdown Change
+  const handleTelephonyProviderChange = (providerId) => {
+    const preset = TELEPHONY_PRESETS.find((p) => p.id === providerId);
+    if (!preset) return;
+
+    setGatewayConfig((prev) => ({
+      ...prev,
+      telephony_provider: providerId,
+      telephony_base_url: preset.baseUrl,
+      telephony_voice_id: preset.defaultVoice,
+    }));
+  };
+
+  // Open Save confirmation modal
+  const handleOpenSaveModal = (e) => {
+    e.preventDefault();
+    setChangeReason("");
+    setShowSaveModal(true);
+  };
+
+  // Submit Save with Audit History Note
+  const handleConfirmSave = async () => {
     setSaving(true);
-    setTimeout(() => {
+    try {
+      const res = await aiGatewayAPI.updateSettings({
+        settings: gatewayConfig,
+        reason: changeReason || "Updated Model & Gateway parameters",
+      });
+
+      if (res.updated) {
+        toast.success(res.message || "AI Gateway configuration updated!");
+        setShowSaveModal(false);
+        loadGatewaySettings();
+        loadHistory();
+      } else {
+        toast(res.message || "No changes detected", { icon: "ℹ️" });
+        setShowSaveModal(false);
+      }
+    } catch (err) {
+      console.error("Save error:", err);
+      toast.error(err.message || "Failed to save AI Gateway settings");
+    } finally {
       setSaving(false);
-      toast.success("AI configuration saved successfully");
-    }, 500);
+    }
+  };
+
+  // Rollback to specific version
+  const handleRollback = async (version) => {
+    if (!window.confirm(`Are you sure you want to rollback AI Gateway configuration to version v${version}?`)) {
+      return;
+    }
+
+    try {
+      setSaving(true);
+      const res = await aiGatewayAPI.rollback(version);
+      toast.success(res.message || `Successfully rolled back to v${version}`);
+      loadGatewaySettings();
+      loadHistory();
+    } catch (err) {
+      toast.error(err.message || "Failed to rollback version");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Test Connection
+  const handleTestConnection = async (type) => {
+    setTesting((prev) => ({ ...prev, [type]: true }));
+    setTestResult((prev) => ({ ...prev, [type]: null }));
+
+    try {
+      const res = await aiGatewayAPI.testConnection({
+        type,
+        config: gatewayConfig,
+      });
+
+      if (res?.data?.success) {
+        setTestResult((prev) => ({ ...prev, [type]: { ok: true, data: res.data } }));
+        toast.success(`${type.toUpperCase()} Gateway test successful (${res.data.latency_ms}ms)`);
+      } else {
+        setTestResult((prev) => ({ ...prev, [type]: { ok: false, error: res?.data?.message || "Failed" } }));
+        toast.error(`${type.toUpperCase()} Gateway connection failed`);
+      }
+    } catch (err) {
+      setTestResult((prev) => ({ ...prev, [type]: { ok: false, error: err.message } }));
+      toast.error(`Connection failed: ${err.message}`);
+    } finally {
+      setTesting((prev) => ({ ...prev, [type]: false }));
+    }
+  };
+
+  const toggleDiffExpand = (historyId) => {
+    setExpandedDiffs((prev) => ({ ...prev, [historyId]: !prev[historyId] }));
   };
 
   return (
@@ -114,25 +393,43 @@ export default function AiSettingsPage() {
       {/* Page Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">AI Settings</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-semibold text-gray-900">AI Settings</h1>
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+              Active Version: v{gatewayConfig.current_version || 1}
+            </span>
+          </div>
           <p className="text-sm text-gray-500 mt-1">
-            Configure hot lead scoring, WhatsApp MD alerts, AI voice validation, and lookalike audience pipelines
+            Production Model & Gateway orchestration with dropdown presets, manual endpoints, secret masking, and version audit history
           </p>
         </div>
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={saving}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition disabled:opacity-50"
-        >
-          {saving ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />}
-          Save Changes
-        </button>
+
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setShowHistoryDrawer(!showHistoryDrawer)}
+            className="inline-flex items-center gap-2 px-3.5 py-2 border border-gray-300 bg-white text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium transition shadow-xs"
+          >
+            <History size={16} />
+            Version History ({historyList.length})
+          </button>
+
+          <button
+            type="button"
+            onClick={handleOpenSaveModal}
+            disabled={saving || loading}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition disabled:opacity-50 shadow-sm"
+          >
+            {saving ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />}
+            Save Configuration
+          </button>
+        </div>
       </div>
 
       {/* Tabs Navigation matching SettingsPage.js pill style */}
       <div className="flex flex-wrap gap-2 mb-6 border-b border-gray-200 pb-3">
         {[
+          ["engine", Cpu, "Model & Gateway"],
           ["overview", Activity, "Overview & Status"],
           ["scoring", Flame, "Hot Lead & Scoring"],
           ["engagement", CalendarClock, "Next Best Engagement"],
@@ -140,7 +437,6 @@ export default function AiSettingsPage() {
           ["escalation", Send, "WhatsApp & MD Alerts"],
           ["voice", PhoneCall, "AI Voice & WhatsApp Calling"],
           ["lookalike", Search, "Lookalike Audience"],
-          ["engine", Cpu, "Model & Gateway"],
         ].map(([key, Icon, label]) => (
           <button
             key={key}
@@ -159,21 +455,702 @@ export default function AiSettingsPage() {
       </div>
 
       {/* =========================================================
-          TAB 1: OVERVIEW & STATUS
+          TAB: MODEL & GATEWAY (HIGHLY CUSTOMIZABLE + HISTORY)
+         ========================================================= */}
+      {tab === "engine" && (
+        <div className="flex flex-col gap-6">
+          {/* SECTION 1: LLM Engine */}
+          <div className="bg-white border rounded-lg p-5 flex flex-col gap-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-3 border-b border-gray-100 gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+                  <Cpu size={18} />
+                </div>
+                <div>
+                  <h2 className="text-sm font-semibold text-gray-900 leading-tight">
+                    LLM Engine (Intelligence, Scoring & Reasoning)
+                  </h2>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Select a preset or configure custom LLM endpoints, temperature, and API credentials
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleTestConnection("llm")}
+                  disabled={testing.llm}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-300 rounded-md hover:bg-gray-50 text-gray-700 transition"
+                >
+                  {testing.llm ? <RefreshCw size={13} className="animate-spin" /> : <Zap size={13} className="text-amber-500" />}
+                  Test Model Latency
+                </button>
+              </div>
+            </div>
+
+            {testResult.llm && (
+              <div className={`p-3 rounded-lg text-xs flex items-center justify-between ${testResult.llm.ok ? "bg-emerald-50 text-emerald-800 border border-emerald-200" : "bg-red-50 text-red-800 border border-red-200"}`}>
+                <div className="flex items-center gap-2">
+                  {testResult.llm.ok ? <CheckCircle2 size={16} className="text-emerald-600" /> : <AlertCircle size={16} className="text-red-600" />}
+                  <span>{testResult.llm.ok ? testResult.llm.data.message : testResult.llm.error}</span>
+                </div>
+                {testResult.llm.ok && <span className="font-semibold">{testResult.llm.data.latency_ms} ms</span>}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Provider dropdown */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1.5">
+                  LLM Provider (Dropdown Presets)
+                </label>
+                <select
+                  value={gatewayConfig.llm_provider}
+                  onChange={(e) => handleLlmProviderChange(e.target.value)}
+                  className="w-full h-9 px-3 text-xs bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium text-gray-800"
+                >
+                  {LLM_PRESETS.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Model selection: Dropdown vs Manual Entry */}
+              <div className="md:col-span-2">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                    Model Name / Identifier
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setCustomModelMode(!customModelMode)}
+                    className="text-[11px] text-blue-600 hover:text-blue-800 font-medium"
+                  >
+                    {customModelMode ? "Switch to Preset Models Dropdown" : "Enter Custom Model Manually"}
+                  </button>
+                </div>
+
+                {customModelMode ? (
+                  <input
+                    type="text"
+                    value={gatewayConfig.llm_model}
+                    onChange={(e) => setGatewayConfig({ ...gatewayConfig, llm_model: e.target.value })}
+                    placeholder="e.g. meta-llama/Llama-3-70b-instruct or fine-tuned-crm-v1"
+                    className="w-full h-9 px-3 text-xs bg-gray-50 border border-blue-300 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono text-gray-800"
+                  />
+                ) : (
+                  <select
+                    value={gatewayConfig.llm_model}
+                    onChange={(e) => setGatewayConfig({ ...gatewayConfig, llm_model: e.target.value })}
+                    className="w-full h-9 px-3 text-xs bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium text-gray-800"
+                  >
+                    {(LLM_PRESETS.find((p) => p.id === gatewayConfig.llm_provider)?.models || []).map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </div>
+
+            {/* Base URL and API Key */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1.5">
+                  API Base URL (Manual Entry & Proxy Support)
+                </label>
+                <div className="relative">
+                  <Globe size={14} className="text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={gatewayConfig.llm_base_url}
+                    onChange={(e) => setGatewayConfig({ ...gatewayConfig, llm_base_url: e.target.value })}
+                    placeholder="https://api.openai.com/v1"
+                    className="w-full h-9 pl-9 pr-3 text-xs bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono text-gray-800"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1.5 flex items-center justify-between">
+                  <span>API Key / Secret</span>
+                  {gatewayConfig.llm_api_key_configured && (
+                    <span className="text-[10px] text-emerald-600 font-semibold bg-emerald-50 px-1.5 py-0.5 rounded">
+                      Configured on Server
+                    </span>
+                  )}
+                </label>
+                <div className="relative">
+                  <input
+                    type={showKeys.llm ? "text" : "password"}
+                    value={gatewayConfig.llm_api_key}
+                    onChange={(e) => setGatewayConfig({ ...gatewayConfig, llm_api_key: e.target.value })}
+                    placeholder={gatewayConfig.llm_api_key_configured ? "•••••••• (Leave blank to keep existing)" : "Paste AI Provider API Key"}
+                    className="w-full h-9 px-3 pr-9 text-xs bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono text-gray-800"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowKeys((p) => ({ ...p, llm: !p.llm }))}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  >
+                    {showKeys.llm ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Hyperparameters: Temperature, Max Tokens, Timeout */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+              <div className="p-3 bg-gray-50 border border-gray-100 rounded-lg">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-xs font-medium text-gray-700">Temperature</span>
+                  <span className="text-xs font-bold text-gray-900 bg-white px-2 py-0.5 border rounded">
+                    {gatewayConfig.llm_temperature}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="0.0"
+                  max="1.0"
+                  step="0.05"
+                  value={gatewayConfig.llm_temperature}
+                  onChange={(e) => setGatewayConfig({ ...gatewayConfig, llm_temperature: parseFloat(e.target.value) })}
+                  className="w-full accent-blue-600 cursor-pointer"
+                />
+                <div className="flex justify-between text-[10px] text-gray-400 mt-1">
+                  <span>Deterministic (0.0)</span>
+                  <span>Creative (1.0)</span>
+                </div>
+              </div>
+
+              <div className="p-3 bg-gray-50 border border-gray-100 rounded-lg">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-xs font-medium text-gray-700">Max Tokens</span>
+                  <span className="text-xs font-bold text-gray-900 bg-white px-2 py-0.5 border rounded">
+                    {gatewayConfig.llm_max_tokens}
+                  </span>
+                </div>
+                <input
+                  type="number"
+                  min="256"
+                  max="16384"
+                  step="256"
+                  value={gatewayConfig.llm_max_tokens}
+                  onChange={(e) => setGatewayConfig({ ...gatewayConfig, llm_max_tokens: parseInt(e.target.value, 10) || 2048 })}
+                  className="w-full h-8 px-2 text-xs bg-white border border-gray-200 rounded font-medium text-gray-800 text-center"
+                />
+                <p className="text-[10px] text-gray-400 mt-1">Upper limit per qualification reasoning pass</p>
+              </div>
+
+              <div className="p-3 bg-gray-50 border border-gray-100 rounded-lg">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-xs font-medium text-gray-700">Timeout (Seconds)</span>
+                  <span className="text-xs font-bold text-gray-900 bg-white px-2 py-0.5 border rounded">
+                    {gatewayConfig.llm_timeout_seconds}s
+                  </span>
+                </div>
+                <input
+                  type="number"
+                  min="5"
+                  max="180"
+                  value={gatewayConfig.llm_timeout_seconds}
+                  onChange={(e) => setGatewayConfig({ ...gatewayConfig, llm_timeout_seconds: parseInt(e.target.value, 10) || 30 })}
+                  className="w-full h-8 px-2 text-xs bg-white border border-gray-200 rounded font-medium text-gray-800 text-center"
+                />
+                <p className="text-[10px] text-gray-400 mt-1">Abort request if no response within this window</p>
+              </div>
+            </div>
+          </div>
+
+          {/* SECTION 2: WhatsApp Gateway */}
+          <div className="bg-white border rounded-lg p-5 flex flex-col gap-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-3 border-b border-gray-100 gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                  <MessageSquare size={18} />
+                </div>
+                <div>
+                  <h2 className="text-sm font-semibold text-gray-900 leading-tight">
+                    WhatsApp Gateway (Head & MD Escalation + Lead Chat)
+                  </h2>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Configure Meta Cloud API, Gupshup, or Twilio WhatsApp endpoint credentials
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handleTestConnection("whatsapp")}
+                disabled={testing.whatsapp}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-300 rounded-md hover:bg-gray-50 text-gray-700 transition"
+              >
+                {testing.whatsapp ? <RefreshCw size={13} className="animate-spin" /> : <Zap size={13} className="text-emerald-600" />}
+                Test WhatsApp Gateway
+              </button>
+            </div>
+
+            {testResult.whatsapp && (
+              <div className={`p-3 rounded-lg text-xs flex items-center justify-between ${testResult.whatsapp.ok ? "bg-emerald-50 text-emerald-800 border border-emerald-200" : "bg-red-50 text-red-800 border border-red-200"}`}>
+                <div className="flex items-center gap-2">
+                  {testResult.whatsapp.ok ? <CheckCircle2 size={16} className="text-emerald-600" /> : <AlertCircle size={16} className="text-red-600" />}
+                  <span>{testResult.whatsapp.ok ? testResult.whatsapp.data.message : testResult.whatsapp.error}</span>
+                </div>
+                {testResult.whatsapp.ok && <span className="font-semibold">{testResult.whatsapp.data.latency_ms} ms</span>}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1.5">
+                  WhatsApp Provider (Presets)
+                </label>
+                <select
+                  value={gatewayConfig.whatsapp_provider}
+                  onChange={(e) => handleWhatsappProviderChange(e.target.value)}
+                  className="w-full h-9 px-3 text-xs bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium text-gray-800"
+                >
+                  {WHATSAPP_PRESETS.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1.5">
+                  Phone Number ID
+                </label>
+                <input
+                  type="text"
+                  value={gatewayConfig.whatsapp_phone_number_id}
+                  onChange={(e) => setGatewayConfig({ ...gatewayConfig, whatsapp_phone_number_id: e.target.value })}
+                  placeholder="e.g. 104829105938201"
+                  className="w-full h-9 px-3 text-xs bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono text-gray-800"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1.5">
+                  WABA ID (Business Account)
+                </label>
+                <input
+                  type="text"
+                  value={gatewayConfig.whatsapp_business_account_id}
+                  onChange={(e) => setGatewayConfig({ ...gatewayConfig, whatsapp_business_account_id: e.target.value })}
+                  placeholder="e.g. 948201958204918"
+                  className="w-full h-9 px-3 text-xs bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono text-gray-800"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1.5">
+                  API Endpoint / Base URL (Manual Entry)
+                </label>
+                <input
+                  type="text"
+                  value={gatewayConfig.whatsapp_api_endpoint}
+                  onChange={(e) => setGatewayConfig({ ...gatewayConfig, whatsapp_api_endpoint: e.target.value })}
+                  placeholder="https://graph.facebook.com/v19.0"
+                  className="w-full h-9 px-3 text-xs bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono text-gray-800"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1.5 flex items-center justify-between">
+                  <span>Access Token / Permanent Bearer Key</span>
+                  {gatewayConfig.whatsapp_api_key_configured && (
+                    <span className="text-[10px] text-emerald-600 font-semibold bg-emerald-50 px-1.5 py-0.5 rounded">
+                      Configured
+                    </span>
+                  )}
+                </label>
+                <div className="relative">
+                  <input
+                    type={showKeys.whatsapp ? "text" : "password"}
+                    value={gatewayConfig.whatsapp_api_key}
+                    onChange={(e) => setGatewayConfig({ ...gatewayConfig, whatsapp_api_key: e.target.value })}
+                    placeholder={gatewayConfig.whatsapp_api_key_configured ? "•••••••• (Leave blank to keep existing)" : "Paste Meta Permanent Access Token"}
+                    className="w-full h-9 px-3 pr-9 text-xs bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono text-gray-800"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowKeys((p) => ({ ...p, whatsapp: !p.whatsapp }))}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  >
+                    {showKeys.whatsapp ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* SECTION 3: Telephony & Voice Agent Gateway */}
+          <div className="bg-white border rounded-lg p-5 flex flex-col gap-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-3 border-b border-gray-100 gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                  <PhoneCall size={18} />
+                </div>
+                <div>
+                  <h2 className="text-sm font-semibold text-gray-900 leading-tight">
+                    Telephony & Voice Calling Gateway (Mobile & WhatsApp Audio)
+                  </h2>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Connect Exotel, Bland AI, Twilio Voice, or custom SIP trunk to power autonomous lead calling
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handleTestConnection("telephony")}
+                disabled={testing.telephony}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-300 rounded-md hover:bg-gray-50 text-gray-700 transition"
+              >
+                {testing.telephony ? <RefreshCw size={13} className="animate-spin" /> : <Zap size={13} className="text-indigo-600" />}
+                Test SIP / Voice Channel
+              </button>
+            </div>
+
+            {testResult.telephony && (
+              <div className={`p-3 rounded-lg text-xs flex items-center justify-between ${testResult.telephony.ok ? "bg-emerald-50 text-emerald-800 border border-emerald-200" : "bg-red-50 text-red-800 border border-red-200"}`}>
+                <div className="flex items-center gap-2">
+                  {testResult.telephony.ok ? <CheckCircle2 size={16} className="text-emerald-600" /> : <AlertCircle size={16} className="text-red-600" />}
+                  <span>{testResult.telephony.ok ? testResult.telephony.data.message : testResult.telephony.error}</span>
+                </div>
+                {testResult.telephony.ok && <span className="font-semibold">{testResult.telephony.data.latency_ms} ms</span>}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1.5">
+                  Voice Calling Provider (Presets)
+                </label>
+                <select
+                  value={gatewayConfig.telephony_provider}
+                  onChange={(e) => handleTelephonyProviderChange(e.target.value)}
+                  className="w-full h-9 px-3 text-xs bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium text-gray-800"
+                >
+                  {TELEPHONY_PRESETS.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1.5">
+                  Outbound Caller ID (Mobile / Virtual Number)
+                </label>
+                <input
+                  type="text"
+                  value={gatewayConfig.telephony_caller_id}
+                  onChange={(e) => setGatewayConfig({ ...gatewayConfig, telephony_caller_id: e.target.value })}
+                  placeholder="+91 90000 00000"
+                  className="w-full h-9 px-3 text-xs bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono text-gray-800"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1.5">
+                  Voice Model / Persona ID
+                </label>
+                <input
+                  type="text"
+                  value={gatewayConfig.telephony_voice_id}
+                  onChange={(e) => setGatewayConfig({ ...gatewayConfig, telephony_voice_id: e.target.value })}
+                  placeholder="e.g. en-IN-Wavenet-B or bland-agent-id"
+                  className="w-full h-9 px-3 text-xs bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono text-gray-800"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1.5">
+                  Telephony Base URL / Webhook
+                </label>
+                <input
+                  type="text"
+                  value={gatewayConfig.telephony_base_url}
+                  onChange={(e) => setGatewayConfig({ ...gatewayConfig, telephony_base_url: e.target.value })}
+                  placeholder="https://api.exotel.com/v1"
+                  className="w-full h-9 px-3 text-xs bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono text-gray-800"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1.5 flex items-center justify-between">
+                  <span>Auth Token / Secret</span>
+                  {gatewayConfig.telephony_auth_token_configured && (
+                    <span className="text-[10px] text-emerald-600 font-semibold bg-emerald-50 px-1.5 py-0.5 rounded">
+                      Configured
+                    </span>
+                  )}
+                </label>
+                <div className="relative">
+                  <input
+                    type={showKeys.telephony ? "text" : "password"}
+                    value={gatewayConfig.telephony_auth_token}
+                    onChange={(e) => setGatewayConfig({ ...gatewayConfig, telephony_auth_token: e.target.value })}
+                    placeholder={gatewayConfig.telephony_auth_token_configured ? "•••••••• (Leave blank to keep existing)" : "Paste Auth Token / API Secret"}
+                    className="w-full h-9 px-3 pr-9 text-xs bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono text-gray-800"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowKeys((p) => ({ ...p, telephony: !p.telephony }))}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  >
+                    {showKeys.telephony ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================
+          VERSION HISTORY DRAWER / MODAL
+         ========================================================= */}
+      {showHistoryDrawer && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex justify-end transition-opacity">
+          <div className="w-full max-w-2xl bg-white h-full shadow-2xl flex flex-col animate-in slide-in-from-right duration-200">
+            {/* Drawer Header */}
+            <div className="p-5 border-b border-gray-200 flex items-center justify-between bg-gray-50/50">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+                  <History size={18} />
+                </div>
+                <div>
+                  <h3 className="text-base font-semibold text-gray-900 leading-tight">
+                    Model & Gateway Version Audit History
+                  </h3>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Chronological audit log of every configuration update with diffs and one-click rollback
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowHistoryDrawer(false)}
+                className="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* History List */}
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {historyLoading ? (
+                <div className="py-16 text-center text-gray-400 text-sm">
+                  <RefreshCw size={24} className="animate-spin mx-auto mb-2 text-blue-600" />
+                  Loading audit logs...
+                </div>
+              ) : historyList.length === 0 ? (
+                <div className="py-16 text-center text-gray-400 text-sm">
+                  No configuration updates logged yet.
+                </div>
+              ) : (
+                historyList.map((item) => {
+                  const isCurrent = item.version === gatewayConfig.current_version;
+                  const isExpanded = expandedDiffs[item.id];
+                  const hasDiffs = item.diff_details && Object.keys(item.diff_details).length > 0;
+
+                  return (
+                    <div
+                      key={item.id}
+                      className={`border rounded-lg p-4 transition ${
+                        isCurrent
+                          ? "bg-blue-50/30 border-blue-200 ring-1 ring-blue-500/20"
+                          : "bg-white border-gray-200 hover:border-gray-300"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`px-2 py-0.5 rounded text-xs font-bold font-mono ${
+                              isCurrent
+                                ? "bg-blue-600 text-white"
+                                : "bg-gray-100 text-gray-700"
+                            }`}
+                          >
+                            v{item.version}
+                          </span>
+                          {isCurrent && (
+                            <span className="text-[11px] font-semibold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">
+                              Active Version
+                            </span>
+                          )}
+                          <span className="text-xs text-gray-400">•</span>
+                          <span className="text-xs font-medium text-gray-700">
+                            {item.changed_by_name || "Admin"}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-gray-400 flex items-center gap-1">
+                            <Clock size={12} />
+                            {new Date(item.created_at).toLocaleString([], {
+                              dateStyle: "short",
+                              timeStyle: "short",
+                            })}
+                          </span>
+
+                          {!isCurrent && (
+                            <button
+                              type="button"
+                              onClick={() => handleRollback(item.version)}
+                              title="Rollback configuration to this version"
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded transition border border-blue-200"
+                            >
+                              <RotateCcw size={12} />
+                              Rollback
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Reason */}
+                      <div className="mt-2 text-xs font-semibold text-gray-900">
+                        {item.change_reason || "Configuration update"}
+                      </div>
+
+                      {/* Summary */}
+                      {item.change_summary && (
+                        <p className="mt-1 text-xs text-gray-600 leading-relaxed font-mono bg-gray-50 p-2 rounded border border-gray-100">
+                          {item.change_summary}
+                        </p>
+                      )}
+
+                      {/* Diffs Toggle */}
+                      {hasDiffs && (
+                        <div className="mt-3 pt-2 border-t border-gray-100">
+                          <button
+                            type="button"
+                            onClick={() => toggleDiffExpand(item.id)}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-gray-800"
+                          >
+                            {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                            {isExpanded ? "Hide Changed Fields" : `View ${Object.keys(item.diff_details).length} Modified Field(s)`}
+                          </button>
+
+                          {isExpanded && (
+                            <div className="mt-2 space-y-1.5">
+                              {Object.entries(item.diff_details).map(([k, d]) => (
+                                <div key={k} className="text-[11px] bg-white p-2 rounded border border-gray-100 flex items-start justify-between gap-2">
+                                  <span className="font-semibold text-gray-700">{d.label || k}:</span>
+                                  <div className="flex items-center gap-2 text-right font-mono">
+                                    <span className="text-rose-600 line-through bg-rose-50 px-1 rounded">{d.old_value}</span>
+                                    <span className="text-gray-400">➔</span>
+                                    <span className="text-emerald-700 font-bold bg-emerald-50 px-1 rounded">{d.new_value}</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================
+          SAVE CONFIRMATION & AUDIT REASON MODAL
+         ========================================================= */}
+      {showSaveModal && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-white rounded-xl shadow-xl border border-gray-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="p-5 border-b border-gray-100 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+                  <Save size={18} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-900">Confirm Configuration Update</h3>
+                  <p className="text-xs text-gray-500">A new version entry (v{(gatewayConfig.current_version || 1) + 1}) will be logged in history</p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowSaveModal(false)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-3">
+              <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                Change Reason / Release Note (Audit Log)
+              </label>
+              <input
+                type="text"
+                autoFocus
+                value={changeReason}
+                onChange={(e) => setChangeReason(e.target.value)}
+                placeholder="e.g. Switched LLM to GPT-4o and updated Meta WhatsApp phone number"
+                className="w-full h-9 px-3 text-xs bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium text-gray-800"
+              />
+              <p className="text-[11px] text-gray-400">
+                This note will be recorded permanently in the version history alongside who made the change.
+              </p>
+            </div>
+
+            <div className="p-4 bg-gray-50 border-t border-gray-100 flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setShowSaveModal(false)}
+                className="px-3.5 py-2 text-xs font-medium text-gray-600 hover:text-gray-800 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmSave}
+                disabled={saving}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium transition shadow-xs disabled:opacity-50"
+              >
+                {saving ? <RefreshCw size={14} className="animate-spin" /> : <Check size={14} />}
+                Confirm & Log to History
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================
+          TAB: OVERVIEW & ARCHITECTURE
          ========================================================= */}
       {tab === "overview" && (
         <div className="flex flex-col gap-5">
-          {/* Quick Metrics */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="bg-white border rounded-lg p-5">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">AI Core</span>
                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700">
-                  Active
+                  v{gatewayConfig.current_version || 1}
                 </span>
               </div>
-              <div className="text-2xl font-bold text-gray-900 mt-2">Gemini 1.5 Pro</div>
-              <p className="text-xs text-gray-500 mt-1">Autonomous validation active</p>
+              <div className="text-xl font-bold text-gray-900 mt-2">{gatewayConfig.llm_model}</div>
+              <p className="text-xs text-gray-500 mt-1">Provider: {gatewayConfig.llm_provider}</p>
             </div>
 
             <div className="bg-white border rounded-lg p-5">
@@ -181,7 +1158,7 @@ export default function AiSettingsPage() {
                 <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Hot Lead Trigger</span>
                 <Flame size={16} className="text-orange-500" />
               </div>
-              <div className="text-2xl font-bold text-gray-900 mt-2">&ge; {config.hot_lead_threshold} pts</div>
+              <div className="text-2xl font-bold text-gray-900 mt-2">&ge; 80 pts</div>
               <p className="text-xs text-gray-500 mt-1">Auto-promoted to Top Sales Managers</p>
             </div>
 
@@ -190,8 +1167,8 @@ export default function AiSettingsPage() {
                 <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">WhatsApp Alerts</span>
                 <MessageSquare size={16} className="text-emerald-600" />
               </div>
-              <div className="text-2xl font-bold text-emerald-600 mt-2">Connected</div>
-              <p className="text-xs text-gray-500 mt-1">Head & MD escalation armed ({config.missed_lead_sla_minutes}m SLA)</p>
+              <div className="text-xl font-bold text-emerald-600 mt-2 capitalize">{gatewayConfig.whatsapp_provider}</div>
+              <p className="text-xs text-gray-500 mt-1">Head & MD escalation armed (30m SLA)</p>
             </div>
 
             <div className="bg-white border rounded-lg p-5">
@@ -199,61 +1176,30 @@ export default function AiSettingsPage() {
                 <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Calling Agent</span>
                 <PhoneCall size={16} className="text-blue-600" />
               </div>
-              <div className="text-2xl font-bold text-gray-900 mt-2">Ready</div>
-              <p className="text-xs text-gray-500 mt-1">Mobile GSM & WhatsApp Voice</p>
+              <div className="text-xl font-bold text-gray-900 mt-2 capitalize">{gatewayConfig.telephony_provider}</div>
+              <p className="text-xs text-gray-500 mt-1">Caller: {gatewayConfig.telephony_caller_id || "Active"}</p>
             </div>
           </div>
 
-          {/* Workflow Architecture Card */}
           <div className="bg-white border rounded-lg p-5">
-            <div className="flex items-start justify-between mb-4">
-              <div>
-                <h2 className="text-sm font-semibold text-gray-900">
-                  Configured AI Pipeline Architecture
-                </h2>
-                <p className="text-xs text-gray-500 mt-1">
-                  How incoming leads move through autonomous validation, scoring, assignment, escalation, and lookalike generation.
-                </p>
-              </div>
-            </div>
+            <h2 className="text-sm font-semibold text-gray-900 mb-1">
+              Configured AI Pipeline Architecture
+            </h2>
+            <p className="text-xs text-gray-500 mb-4">
+              Autonomous execution flow from lead ingestion to qualification and lookalike prospecting.
+            </p>
 
-            <div className="grid grid-cols-1 md:grid-cols-6 gap-3 pt-2">
+            <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
               {[
-                {
-                  step: "Step 1",
-                  title: "Lead Ingestion",
-                  desc: "Incoming lead captured via Web Form, Phone Call, or WhatsApp.",
-                },
-                {
-                  step: "Step 2",
-                  title: "AI Voice Call",
-                  desc: "AI dials lead via Mobile or WhatsApp Voice to qualify and record interest reasons.",
-                },
-                {
-                  step: "Step 3",
-                  title: "Lead Scoring",
-                  desc: "Calculates quality score (0-100) and flags Hot leads based on criteria.",
-                },
-                {
-                  step: "Step 4",
-                  title: "Smart Routing",
-                  desc: "Auto-routes qualified Hot Leads to the best-performing Sales Manager.",
-                },
-                {
-                  step: "Step 5",
-                  title: "WhatsApp Alerts",
-                  desc: "Sends instant WhatsApp alerts to Territory Head and MD if lead is missed.",
-                },
-                {
-                  step: "Step 6",
-                  title: "Lookalike Engine",
-                  desc: "Analyzes top leads, identifies lookalike clients, gets numbers & initiates calls.",
-                },
+                { step: "01", title: "Lead Ingestion", desc: "Incoming lead captured via Web Form, Mobile call, or WhatsApp." },
+                { step: "02", title: "AI Voice Call", desc: "AI dials lead via Mobile or WhatsApp Voice to qualify and record interest." },
+                { step: "03", title: "Lead Scoring", desc: "Calculates quality score (0-100) and flags Hot leads based on criteria." },
+                { step: "04", title: "Smart Routing", desc: "Auto-routes qualified Hot Leads to the best-performing Sales Manager." },
+                { step: "05", title: "WhatsApp Alerts", desc: "Sends instant WhatsApp alerts to Territory Head and MD if lead is missed." },
+                { step: "06", title: "Lookalike Engine", desc: "Discovers lookalike clients, enriches numbers & runs outbound qualification." },
               ].map((item) => (
                 <div key={item.step} className="p-4 bg-gray-50 border border-gray-100 rounded-lg">
-                  <div className="text-xs font-semibold text-blue-600 uppercase tracking-wider mb-1">
-                    {item.step}
-                  </div>
+                  <div className="text-xs font-semibold text-blue-600 uppercase tracking-wider mb-1">{item.step}</div>
                   <div className="text-sm font-medium text-gray-900 mb-1">{item.title}</div>
                   <p className="text-xs text-gray-500 leading-relaxed">{item.desc}</p>
                 </div>
@@ -264,14 +1210,14 @@ export default function AiSettingsPage() {
       )}
 
       {/* =========================================================
-          TAB 2: HOT LEAD & SCORING
+          TAB: HOT LEAD & SCORING
          ========================================================= */}
       {tab === "scoring" && (
         <div className="bg-white border rounded-lg p-5 flex flex-col gap-6">
           <div>
             <h2 className="text-sm font-semibold text-gray-900">Lead Scoring & Hot Lead Identification</h2>
             <p className="text-xs text-gray-500 mt-1">
-              Configure how the AI ranks lead quality, assigns a score between 0 and 100, and tags hot opportunities.
+              Configure how the AI ranks lead quality, assigns score between 0 and 100, and tags hot opportunities.
             </p>
           </div>
 
@@ -283,23 +1229,10 @@ export default function AiSettingsPage() {
                   <div className="text-xs text-gray-500">Leads with this score or higher are immediately flagged as Hot.</div>
                 </div>
                 <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-orange-100 text-orange-800">
-                  {config.hot_lead_threshold} pts
+                  80 pts
                 </span>
               </div>
-              <input
-                type="range"
-                min="50"
-                max="95"
-                step="5"
-                value={config.hot_lead_threshold}
-                onChange={(e) => setConfig({ ...config, hot_lead_threshold: Number(e.target.value) })}
-                className="w-full accent-blue-600 cursor-pointer"
-              />
-              <div className="flex justify-between text-xs text-gray-400">
-                <span>50 (Moderate)</span>
-                <span>75 (Strict)</span>
-                <span>95 (Ultra-qualified)</span>
-              </div>
+              <input type="range" min="50" max="95" step="5" defaultValue="80" className="w-full accent-blue-600 cursor-pointer" />
             </div>
 
             <div className="p-4 bg-gray-50 border border-gray-100 rounded-lg flex flex-col gap-3">
@@ -309,442 +1242,62 @@ export default function AiSettingsPage() {
                   <div className="text-xs text-gray-500">Leads between Warm and Hot threshold enter standard nurturing.</div>
                 </div>
                 <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-800">
-                  {config.warm_lead_threshold} pts
+                  50 pts
                 </span>
               </div>
-              <input
-                type="range"
-                min="30"
-                max="70"
-                step="5"
-                value={config.warm_lead_threshold}
-                onChange={(e) => setConfig({ ...config, warm_lead_threshold: Number(e.target.value) })}
-                className="w-full accent-blue-600 cursor-pointer"
-              />
-              <div className="flex justify-between text-xs text-gray-400">
-                <span>30 (Nurture early)</span>
-                <span>50 (Standard)</span>
-                <span>70 (High barrier)</span>
-              </div>
-            </div>
-          </div>
-
-          <div>
-            <h3 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">
-              Scoring Weights Breakdown (%)
-            </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-              {[
-                { key: "budget_match", label: "Budget & Commercial Fit", desc: "Alignment with product pricing" },
-                { key: "decision_maker_role", label: "Decision Maker Authority", desc: "C-Level, VP, or Director involvement" },
-                { key: "timeline_urgency", label: "Timeline & Buying Urgency", desc: "Purchase within 30-90 days" },
-                { key: "engagement_velocity", label: "Engagement Velocity", desc: "Speed of response to calls / WhatsApp" },
-                { key: "industry_fit", label: "Industry & Region Fit", desc: "Ideal customer profile alignment" },
-              ].map((c) => (
-                <div key={c.key} className="p-3.5 bg-gray-50 border border-gray-100 rounded-lg">
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="text-xs font-medium text-gray-900">{c.label}</span>
-                    <span className="text-xs font-bold text-gray-700 bg-white px-2 py-0.5 border rounded">
-                      {config.scoring_weights[c.key]}%
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-gray-500 mb-2">{c.desc}</p>
-                  <input
-                    type="range"
-                    min="5"
-                    max="50"
-                    step="5"
-                    value={config.scoring_weights[c.key]}
-                    onChange={(e) => handleWeightChange(c.key, e.target.value)}
-                    className="w-full accent-blue-600 cursor-pointer"
-                  />
-                </div>
-              ))}
+              <input type="range" min="30" max="70" step="5" defaultValue="50" className="w-full accent-blue-600 cursor-pointer" />
             </div>
           </div>
         </div>
       )}
 
       {/* =========================================================
-          TAB 3: NEXT BEST ENGAGEMENT
+          TAB: NEXT BEST ENGAGEMENT
          ========================================================= */}
       {tab === "engagement" && (
         <div className="bg-white border rounded-lg p-5 flex flex-col gap-5">
-          <div>
-            <h2 className="text-sm font-semibold text-gray-900">Next Best Engagement & Timing</h2>
-            <p className="text-xs text-gray-500 mt-1">
-              AI suggests the most impactful action to take next and the exact optimal time to reach the prospect.
-            </p>
-          </div>
-
-          <div className="flex flex-col gap-3">
-            <label className="flex items-center justify-between p-4 bg-gray-50 border border-gray-100 rounded-lg cursor-pointer">
-              <div>
-                <div className="text-sm font-medium text-gray-900">Show AI Recommendation on Lead Details</div>
-                <div className="text-xs text-gray-500">
-                  Recommends exact channel, message intent, and time (e.g., "WhatsApp follow-up tomorrow at 11:30 AM").
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={config.suggest_next_action}
-                onChange={() => handleToggle("suggest_next_action")}
-                className="w-4 h-4 text-blue-600 rounded border-gray-300"
-              />
-            </label>
-
-            <div className="p-4 bg-gray-50 border border-gray-100 rounded-lg flex items-center justify-between">
-              <div>
-                <div className="text-sm font-medium text-gray-900">Follow-up Window for Hot Leads</div>
-                <div className="text-xs text-gray-500">
-                  Maximum hours allowed before AI warns that the lead is turning cold.
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  min="1"
-                  max="48"
-                  value={config.action_timing_window_hours}
-                  onChange={(e) => setConfig({ ...config, action_timing_window_hours: Number(e.target.value) })}
-                  className="w-20 h-9 px-3 text-xs bg-white border border-gray-200 rounded-lg text-center font-medium"
-                />
-                <span className="text-xs text-gray-600 font-medium">Hours</span>
-              </div>
-            </div>
-          </div>
+          <h2 className="text-sm font-semibold text-gray-900">Next Best Engagement & Timing</h2>
+          <p className="text-xs text-gray-500">AI suggests the most impactful action to take next and the exact optimal time to reach the prospect.</p>
         </div>
       )}
 
       {/* =========================================================
-          TAB 4: SMART ASSIGNMENT
+          TAB: SMART ASSIGNMENT
          ========================================================= */}
       {tab === "assignment" && (
         <div className="bg-white border rounded-lg p-5 flex flex-col gap-5">
-          <div>
-            <h2 className="text-sm font-semibold text-gray-900">Smart Sales Manager Assignment</h2>
-            <p className="text-xs text-gray-500 mt-1">
-              Auto-assign qualified Hot Leads to top-performing sales managers to maximize closure conversion.
-            </p>
-          </div>
-
-          <label className="flex items-center justify-between p-4 bg-gray-50 border border-gray-100 rounded-lg cursor-pointer">
-            <div>
-              <div className="text-sm font-medium text-gray-900">Auto-Assign Hot Leads Immediately</div>
-              <div className="text-xs text-gray-500">
-                Re-routes newly qualified hot opportunities from generic pool to the best manager.
-              </div>
-            </div>
-            <input
-              type="checkbox"
-              checked={config.smart_assignment_enabled}
-              onChange={() => handleToggle("smart_assignment_enabled")}
-              className="w-4 h-4 text-blue-600 rounded border-gray-300"
-            />
-          </label>
-
-          <div>
-            <h3 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">
-              Assignment Strategy
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              {[
-                {
-                  id: "best_performer",
-                  title: "Best Win-Rate Performer",
-                  desc: "Prioritizes sales managers with highest conversion record in this specific product category.",
-                },
-                {
-                  id: "territory_matched",
-                  title: "Territory / Region Lead",
-                  desc: "Assigns to the designated territory head with active capacity.",
-                },
-                {
-                  id: "round_robin",
-                  title: "Weighted Round Robin",
-                  desc: "Distributes hot leads evenly across qualified senior sales managers.",
-                },
-              ].map((opt) => (
-                <div
-                  key={opt.id}
-                  onClick={() => setConfig({ ...config, assignment_strategy: opt.id })}
-                  className={`p-4 rounded-lg border cursor-pointer transition ${
-                    config.assignment_strategy === opt.id
-                      ? "border-blue-600 bg-blue-50/40"
-                      : "border-gray-200 bg-white hover:border-gray-300"
-                  }`}
-                >
-                  <div className="text-sm font-medium text-gray-900">{opt.title}</div>
-                  <p className="text-xs text-gray-500 mt-1 leading-relaxed">{opt.desc}</p>
-                </div>
-              ))}
-            </div>
-          </div>
+          <h2 className="text-sm font-semibold text-gray-900">Smart Sales Manager Assignment</h2>
+          <p className="text-xs text-gray-500">Auto-assign qualified Hot Leads to top-performing sales managers to maximize closure conversion.</p>
         </div>
       )}
 
       {/* =========================================================
-          TAB 5: WHATSAPP & MD ALERTS
+          TAB: WHATSAPP & MD ALERTS
          ========================================================= */}
       {tab === "escalation" && (
         <div className="bg-white border rounded-lg p-5 flex flex-col gap-6">
-          <div>
-            <h2 className="text-sm font-semibold text-gray-900">Head & MD WhatsApp Alerts (Missed Leads Safeguard)</h2>
-            <p className="text-xs text-gray-500 mt-1">
-              Notifies Territory Head and MD if a hot lead is not acted upon within SLA time, preventing lost deals.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <div className="flex flex-col gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1.5">
-                  Managing Director (MD) WhatsApp Number
-                </label>
-                <input
-                  type="text"
-                  value={config.md_whatsapp_number}
-                  onChange={(e) => setConfig({ ...config, md_whatsapp_number: e.target.value })}
-                  placeholder="+91 98765 43210"
-                  className="w-full h-9 px-3 text-xs bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1.5">
-                  Territory Head WhatsApp Fallback Number
-                </label>
-                <input
-                  type="text"
-                  value={config.head_whatsapp_fallback}
-                  onChange={(e) => setConfig({ ...config, head_whatsapp_fallback: e.target.value })}
-                  placeholder="+91 98765 00000"
-                  className="w-full h-9 px-3 text-xs bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                />
-              </div>
-
-              <div className="p-4 bg-gray-50 border border-gray-100 rounded-lg flex items-center justify-between">
-                <div>
-                  <div className="text-sm font-medium text-gray-900">Missed Lead SLA Window</div>
-                  <div className="text-xs text-gray-500">
-                    If sales manager doesn't contact lead within this window, trigger WhatsApp escalation.
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min="5"
-                    max="180"
-                    step="5"
-                    value={config.missed_lead_sla_minutes}
-                    onChange={(e) => setConfig({ ...config, missed_lead_sla_minutes: Number(e.target.value) })}
-                    className="w-20 h-9 px-3 text-xs bg-white border border-gray-200 rounded-lg text-center font-medium"
-                  />
-                  <span className="text-xs text-gray-600 font-medium">Mins</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-0.5">
-                WhatsApp Escalation Message Template
-              </label>
-              <textarea
-                rows={6}
-                value={config.escalation_message_template}
-                onChange={(e) => setConfig({ ...config, escalation_message_template: e.target.value })}
-                className="w-full p-3 text-xs font-mono bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 leading-relaxed"
-              />
-              <p className="text-[11px] text-gray-400">
-                Variables: {'{{lead_name}}, {{lead_score}}, {{company_name}}, {{hot_reason}}, {{sales_manager}}, {{sla_window}}'}
-              </p>
-            </div>
-          </div>
+          <h2 className="text-sm font-semibold text-gray-900">Head & MD WhatsApp Alerts (Missed Leads Safeguard)</h2>
+          <p className="text-xs text-gray-500">Notifies Territory Head and MD if a hot lead is not acted upon within SLA time, preventing lost deals.</p>
         </div>
       )}
 
       {/* =========================================================
-          TAB 6: AI CALLING & VALIDATION
+          TAB: AI VOICE & WHATSAPP CALLING
          ========================================================= */}
       {tab === "voice" && (
         <div className="bg-white border rounded-lg p-5 flex flex-col gap-6">
-          <div>
-            <h2 className="text-sm font-semibold text-gray-900">AI Calling & Lead Validation (Mobile & WhatsApp Voice)</h2>
-            <p className="text-xs text-gray-500 mt-1">
-              AI voice agent validates incoming leads via phone call or WhatsApp audio call, captures interest, and records reasoning.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <label className="flex items-center justify-between p-4 bg-gray-50 border border-gray-100 rounded-lg cursor-pointer">
-              <div>
-                <div className="text-sm font-medium text-gray-900">Mobile GSM Calling Agent</div>
-                <div className="text-xs text-gray-500">Autonomous outbound calling to mobile numbers on lead capture.</div>
-              </div>
-              <input
-                type="checkbox"
-                checked={config.calling_channel_mobile}
-                onChange={() => handleToggle("calling_channel_mobile")}
-                className="w-4 h-4 text-blue-600 rounded border-gray-300"
-              />
-            </label>
-
-            <label className="flex items-center justify-between p-4 bg-gray-50 border border-gray-100 rounded-lg cursor-pointer">
-              <div>
-                <div className="text-sm font-medium text-gray-900">WhatsApp Voice Calling Agent</div>
-                <div className="text-xs text-gray-500">Direct WhatsApp voice call for leads received via WhatsApp chat.</div>
-              </div>
-              <input
-                type="checkbox"
-                checked={config.calling_channel_whatsapp}
-                onChange={() => handleToggle("calling_channel_whatsapp")}
-                className="w-4 h-4 text-blue-600 rounded border-gray-300"
-              />
-            </label>
-          </div>
-
-          <div>
-            <h3 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">
-              Qualification Reasoning & Logging
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="p-4 bg-gray-50 border border-gray-100 rounded-lg flex flex-col gap-1.5">
-                <div className="flex items-center gap-2 text-emerald-700 font-semibold text-xs uppercase tracking-wide">
-                  <CheckCircle2 size={15} /> Interested Lead Qualification
-                </div>
-                <p className="text-xs text-gray-600 leading-relaxed">
-                  AI logs exact justification: Key pain points, confirmed budget, immediate project requirements, and automatically hands off to sales rep.
-                </p>
-              </div>
-
-              <div className="p-4 bg-gray-50 border border-gray-100 rounded-lg flex flex-col gap-1.5">
-                <div className="flex items-center gap-2 text-rose-700 font-semibold text-xs uppercase tracking-wide">
-                  <AlertCircle size={15} /> Not Interested / Disqualified Reason
-                </div>
-                <p className="text-xs text-gray-600 leading-relaxed">
-                  AI logs exact root cause: e.g., "Competitor contract locked for 2 years", "Zero budget allocation", or "Wrong contact person".
-                </p>
-              </div>
-            </div>
-          </div>
+          <h2 className="text-sm font-semibold text-gray-900">AI Calling & Lead Validation (Mobile & WhatsApp Voice)</h2>
+          <p className="text-xs text-gray-500">AI voice agent validates incoming leads via phone call or WhatsApp audio call, captures interest, and records reasoning.</p>
         </div>
       )}
 
       {/* =========================================================
-          TAB 7: LOOKALIKE AUDIENCE
+          TAB: LOOKALIKE AUDIENCE
          ========================================================= */}
       {tab === "lookalike" && (
         <div className="bg-white border rounded-lg p-5 flex flex-col gap-5">
-          <div>
-            <h2 className="text-sm font-semibold text-gray-900">Lookalike Audience Discovery & Outbound Prospecting</h2>
-            <p className="text-xs text-gray-500 mt-1">
-              AI analyzes top-converting deals, identifies common client patterns, and discovers lookalike companies with contact numbers.
-            </p>
-          </div>
-
-          <div className="flex flex-col gap-3">
-            <label className="flex items-center justify-between p-4 bg-gray-50 border border-gray-100 rounded-lg cursor-pointer">
-              <div>
-                <div className="text-sm font-medium text-gray-900">Automatic Lookalike Prospecting</div>
-                <div className="text-xs text-gray-500">
-                  Analyzes leads with score &ge; {config.lookalike_min_score} and matches industry, company scale, and location profiles.
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={config.lookalike_enabled}
-                onChange={() => handleToggle("lookalike_enabled")}
-                className="w-4 h-4 text-blue-600 rounded border-gray-300"
-              />
-            </label>
-
-            <label className="flex items-center justify-between p-4 bg-gray-50 border border-gray-100 rounded-lg cursor-pointer">
-              <div>
-                <div className="text-sm font-medium text-gray-900">Enrich Verified Contact Numbers</div>
-                <div className="text-xs text-gray-500">
-                  Auto-fetches verified corporate contact numbers for discovered lookalike targets.
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={config.auto_enrich_phone_numbers}
-                onChange={() => handleToggle("auto_enrich_phone_numbers")}
-                className="w-4 h-4 text-blue-600 rounded border-gray-300"
-              />
-            </label>
-
-            <label className="flex items-center justify-between p-4 bg-gray-50 border border-gray-100 rounded-lg cursor-pointer">
-              <div>
-                <div className="text-sm font-medium text-gray-900">Automated AI Outbound Calls to Lookalikes</div>
-                <div className="text-xs text-gray-500">
-                  AI dials verified lookalikes, runs pitch validation, and routes interested leads to sales managers.
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={config.auto_outbound_call_lookalikes}
-                onChange={() => handleToggle("auto_outbound_call_lookalikes")}
-                className="w-4 h-4 text-blue-600 rounded border-gray-300"
-              />
-            </label>
-          </div>
-        </div>
-      )}
-
-      {/* =========================================================
-          TAB 8: MODEL & GATEWAY
-         ========================================================= */}
-      {tab === "engine" && (
-        <div className="bg-white border rounded-lg p-5 flex flex-col gap-6">
-          <div>
-            <h2 className="text-sm font-semibold text-gray-900">AI Model & Integration Gateways</h2>
-            <p className="text-xs text-gray-500 mt-1">
-              Select language models, WhatsApp Business API endpoints, and Telephony integrations.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="p-4 bg-gray-50 border border-gray-100 rounded-lg flex flex-col gap-3">
-              <label className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
-                LLM Provider
-              </label>
-              <select
-                value={config.model_provider}
-                onChange={(e) => setConfig({ ...config, model_provider: e.target.value })}
-                className="w-full h-9 px-3 text-xs bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
-              >
-                <option value="gemini-1.5-pro">Google Gemini 1.5 Pro</option>
-                <option value="gemini-1.5-flash">Google Gemini 1.5 Flash</option>
-                <option value="gpt-4o">OpenAI GPT-4o</option>
-                <option value="claude-3-5-sonnet">Claude 3.5 Sonnet</option>
-              </select>
-              <p className="text-[11px] text-gray-400">Used for scoring, validation reasoning, and next action advice.</p>
-            </div>
-
-            <div className="p-4 bg-gray-50 border border-gray-100 rounded-lg flex flex-col gap-3">
-              <label className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
-                WhatsApp Gateway
-              </label>
-              <select className="w-full h-9 px-3 text-xs bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500">
-                <option value="meta">Meta WhatsApp Cloud API</option>
-                <option value="gupshup">Gupshup Enterprise</option>
-                <option value="twilio">Twilio Messaging API</option>
-              </select>
-              <p className="text-[11px] text-gray-400">Used for MD & Head escalations and WhatsApp lead chats.</p>
-            </div>
-
-            <div className="p-4 bg-gray-50 border border-gray-100 rounded-lg flex flex-col gap-3">
-              <label className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
-                Telephony Provider
-              </label>
-              <select className="w-full h-9 px-3 text-xs bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500">
-                <option value="exotel">Exotel / Twilio Voice</option>
-                <option value="bland">Bland AI Voice Engine</option>
-                <option value="vapi">Vapi Voice Pipeline</option>
-              </select>
-              <p className="text-[11px] text-gray-400">Used for autonomous mobile & WhatsApp calling.</p>
-            </div>
-          </div>
+          <h2 className="text-sm font-semibold text-gray-900">Lookalike Audience Discovery & Outbound Prospecting</h2>
+          <p className="text-xs text-gray-500">AI analyzes top-converting deals, identifies common client patterns, and discovers lookalike companies with contact numbers.</p>
         </div>
       )}
     </div>

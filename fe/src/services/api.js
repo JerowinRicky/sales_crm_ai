@@ -347,4 +347,12 @@ export const mailAPI = {
   previewTemplate: (key, data) => api.post(`/mail/templates/${key}/preview`, data),
 };
 
+export const aiGatewayAPI = {
+  getSettings: () => api.get('/ai/gateway'),
+  updateSettings: (data) => api.put('/ai/gateway', data),
+  getHistory: (params) => api.get('/ai/gateway/history', { params }),
+  rollback: (version) => api.post(`/ai/gateway/rollback/${version}`),
+  testConnection: (data) => api.post('/ai/gateway/test-connection', data),
+};
+
 export default api;
