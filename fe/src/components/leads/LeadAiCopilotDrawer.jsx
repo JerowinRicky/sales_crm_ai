@@ -343,7 +343,7 @@ export default function LeadAiCopilotDrawer({ isOpen, onClose }) {
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
-                <h3 className="text-sm font-bold text-gray-900">SalesCRM AI Copilot</h3>
+                <h3 className="text-sm font-bold text-gray-900">Olgpt ai</h3>
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
                   <ShieldCheck size={11} />
                   {isSalesManager ? 'Domain Scoped' : isAdmin ? 'Admin Grounding' : 'My Leads'}
@@ -719,7 +719,7 @@ export default function LeadAiCopilotDrawer({ isOpen, onClose }) {
                 placeholder={
                   isSalesManager
                     ? 'Ask about your domain leads, next engagements, or team...'
-                    : 'Ask AI Copilot about leads, stages, follow-ups...'
+                    : 'Ask Olgpt ai about leads, stages, follow-ups...'
                 }
                 className="w-full pl-3.5 pr-10 py-2.5 text-xs bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 text-gray-800 shadow-2xs"
               />

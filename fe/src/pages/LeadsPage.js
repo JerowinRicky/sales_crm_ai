@@ -884,11 +884,11 @@ export default function LeadsPage() {
           <button
             type="button"
             onClick={() => setAiCopilotOpen(true)}
-            className="inline-flex items-center gap-2 px-3.5 py-2 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white rounded-lg hover:opacity-95 shadow-xs transition font-medium text-sm"
-            title="Open AI Sales Copilot"
+            className="inline-flex items-center gap-2 px-3.5 py-2 border border-gray-300 text-gray-700 bg-transparent hover:bg-gray-50 rounded-lg shadow-xs transition font-medium text-sm"
+            title="Open Olgpt ai"
           >
-            <Sparkles size={15} className="animate-pulse" />
-            AI Copilot
+            <Sparkles size={15} className="text-gray-600" />
+            Olgpt ai
           </button>
 
           <button
@@ -1629,16 +1629,16 @@ export default function LeadsPage() {
         }}
       />
 
-      {/* Floating AI Copilot Trigger */}
+      {/* Floating Olgpt ai Trigger */}
       <button
         type="button"
         onClick={() => setAiCopilotOpen((prev) => !prev)}
-        className="fixed bottom-6 right-6 z-40 flex items-center gap-2.5 px-4 py-3 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white font-medium text-sm rounded-full shadow-lg hover:shadow-indigo-500/30 hover:scale-105 active:scale-95 transition-all cursor-pointer"
-        title="Open AI Sales Copilot"
+        className="fixed bottom-6 right-6 z-40 flex items-center gap-2 px-3.5 py-2.5 bg-white border border-gray-300 text-gray-800 font-medium text-sm rounded-full shadow-md hover:bg-gray-50 hover:shadow-lg transition-all cursor-pointer"
+        title="Open Olgpt ai"
       >
-        <Sparkles size={17} className="animate-pulse" />
-        <span>AI Copilot</span>
-        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+        <Sparkles size={16} className="text-gray-600" />
+        <span>Olgpt ai</span>
+        <span className="w-2 h-2 rounded-full bg-emerald-500 ml-0.5" />
       </button>
 
       {/* Lead AI Copilot Drawer */}
