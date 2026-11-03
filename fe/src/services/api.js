@@ -355,4 +355,12 @@ export const aiGatewayAPI = {
   testConnection: (data) => api.post('/ai/gateway/test-connection', data),
 };
 
+export const aiCopilotAPI = {
+  getRagSettings: () => api.get('/ai/rag/settings'),
+  updateRagSettings: (data) => api.put('/ai/rag/settings', data),
+  query: (data) => api.post('/ai/rag/query', data),
+  getHistory: () => api.get('/ai/rag/history'),
+  clearHistory: () => api.delete('/ai/rag/history'),
+};
+
 export default api;

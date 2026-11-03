@@ -334,4 +334,12 @@ router.get('/ai/gateway/history', authenticate, requireManager, aiGatewayControl
 router.post('/ai/gateway/rollback/:version', authenticate, requireAdmin, aiGatewayController.rollback);
 router.post('/ai/gateway/test-connection', authenticate, requireAdmin, aiGatewayController.testConnection);
 
+// AI RAG & Copilot Endpoints
+const aiRagController = require('../controllers/aiRagController');
+router.get('/ai/rag/settings', authenticate, requireManager, aiRagController.getSettings);
+router.put('/ai/rag/settings', authenticate, requireAdmin, aiRagController.updateSettings);
+router.post('/ai/rag/query', authenticate, aiRagController.queryCopilot);
+router.get('/ai/rag/history', authenticate, aiRagController.getChatHistory);
+router.delete('/ai/rag/history', authenticate, aiRagController.clearChatHistory);
+
 module.exports = router;

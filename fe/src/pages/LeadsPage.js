@@ -34,6 +34,8 @@ import ExportButtons from '../components/common/ExportButtons';
 import ConfirmModal from '../components/common/ConfirmModal';
 import CustomFilterDrawer from '../components/leads/CustomFilterDrawer';
 import BulkUpdateModal from '../components/leads/BulkUpdateModal';
+import LeadAiCopilotDrawer from '../components/leads/LeadAiCopilotDrawer';
+import { Sparkles, Bot } from 'lucide-react';
 
 const LEADS_VIEW_KEY = 'crm_leads_view';
 const LEADS_FILTERS_KEY = 'crm_leads_active_filters';
@@ -330,6 +332,7 @@ export default function LeadsPage() {
   const initialSavedFilters = getStoredFilters();
 
   const [leads, setLeads] = useState([]);
+  const [aiCopilotOpen, setAiCopilotOpen] = useState(false);
   const [stages, setStages] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(() => initialSavedFilters?.page ?? 1);
@@ -877,6 +880,16 @@ export default function LeadsPage() {
               List
             </button>
           </div>
+
+          <button
+            type="button"
+            onClick={() => setAiCopilotOpen(true)}
+            className="inline-flex items-center gap-2 px-3.5 py-2 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white rounded-lg hover:opacity-95 shadow-xs transition font-medium text-sm"
+            title="Open AI Sales Copilot"
+          >
+            <Sparkles size={15} className="animate-pulse" />
+            AI Copilot
+          </button>
 
           <button
             type="button"
@@ -1614,6 +1627,25 @@ export default function LeadsPage() {
           setSelectedLeadIds([]);
           loadAll();
         }}
+      />
+
+      {/* Floating AI Copilot Trigger */}
+      <button
+        type="button"
+        onClick={() => setAiCopilotOpen((prev) => !prev)}
+        className="fixed bottom-6 right-6 z-40 flex items-center gap-2.5 px-4 py-3 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white font-medium text-sm rounded-full shadow-lg hover:shadow-indigo-500/30 hover:scale-105 active:scale-95 transition-all cursor-pointer"
+        title="Open AI Sales Copilot"
+      >
+        <Sparkles size={17} className="animate-pulse" />
+        <span>AI Copilot</span>
+        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+      </button>
+
+      {/* Lead AI Copilot Drawer */}
+      <LeadAiCopilotDrawer
+        isOpen={aiCopilotOpen}
+        onClose={() => setAiCopilotOpen(false)}
+        onLeadUpdated={() => loadAll()}
       />
 
     </div>

@@ -35,7 +35,7 @@ import {
   ChevronUp,
   X,
 } from "lucide-react";
-import { aiGatewayAPI } from "../../services/api";
+import { aiGatewayAPI, aiCopilotAPI } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 
 // Presets for LLM Providers
@@ -196,6 +196,19 @@ export default function AiSettingsPage() {
     telephony_max_call_duration_seconds: 300,
   });
 
+  // RAG & Application Grounding Settings State
+  const [ragConfig, setRagConfig] = useState({
+    rag_enabled: true,
+    strict_crm_grounding: true,
+    enable_hot_lead_rag: true,
+    enable_next_engagement: true,
+    enable_qualification_reasoning: true,
+    enable_external_search: true,
+    external_search_provider: "duckduckgo",
+    hot_lead_threshold: 80,
+    warm_lead_threshold: 50,
+  });
+
   // UI state for inputs (toggle manual entry vs dropdown)
   const [customModelMode, setCustomModelMode] = useState(false);
   const [showKeys, setShowKeys] = useState({
@@ -262,10 +275,23 @@ export default function AiSettingsPage() {
     }
   }, []);
 
+  // Load RAG Settings from backend
+  const loadRagSettings = useCallback(async () => {
+    try {
+      const res = await aiCopilotAPI.getRagSettings();
+      if (res?.data) {
+        setRagConfig(res.data);
+      }
+    } catch (err) {
+      console.error("Error loading RAG settings:", err);
+    }
+  }, []);
+
   useEffect(() => {
     loadGatewaySettings();
     loadHistory();
-  }, [loadGatewaySettings, loadHistory]);
+    loadRagSettings();
+  }, [loadGatewaySettings, loadHistory, loadRagSettings]);
 
   // Handle LLM Provider Dropdown Change
   const handleLlmProviderChange = (providerId) => {
@@ -322,14 +348,19 @@ export default function AiSettingsPage() {
         reason: changeReason || "Updated Model & Gateway parameters",
       });
 
+      // Save RAG settings
+      await aiCopilotAPI.updateRagSettings(ragConfig);
+
       if (res.updated) {
-        toast.success(res.message || "AI Gateway configuration updated!");
+        toast.success(res.message || "AI configuration updated successfully!");
         setShowSaveModal(false);
         loadGatewaySettings();
         loadHistory();
+        loadRagSettings();
       } else {
-        toast(res.message || "No changes detected", { icon: "ℹ️" });
+        toast.success("AI and RAG configuration saved!");
         setShowSaveModal(false);
+        loadRagSettings();
       }
     } catch (err) {
       console.error("Save error:", err);
@@ -432,6 +463,7 @@ export default function AiSettingsPage() {
       <div className="flex flex-wrap gap-2 mb-6 border-b border-gray-200 pb-3">
         {[
           ["engine", Cpu, "Model & Gateway"],
+          ["rag", Layers, "RAG & Company Intelligence"],
           ["overview", Activity, "Overview & Status"],
           ["scoring", Flame, "Hot Lead & Scoring"],
           ["engagement", CalendarClock, "Next Best Engagement"],
@@ -1134,6 +1166,220 @@ export default function AiSettingsPage() {
                 Confirm & Log to History
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================
+          TAB: RAG & APPLICATION GROUNDING ENGINE
+         ========================================================= */}
+      {tab === "rag" && (
+        <div className="flex flex-col gap-6">
+          {/* Overview Banner */}
+          <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 border border-blue-100 rounded-lg p-5">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold">
+                  <Layers size={22} />
+                </div>
+                <div>
+                  <h2 className="text-base font-semibold text-gray-900">RAG (Retrieval-Augmented Generation) & Knowledge Base</h2>
+                  <p className="text-xs text-gray-600 mt-0.5">
+                    Ensures AI generates grounded responses strictly sourced from your CRM leads, call logs, activities, and customer notes.
+                  </p>
+                </div>
+              </div>
+              <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${
+                ragConfig.rag_enabled ? "bg-emerald-100 text-emerald-800" : "bg-gray-100 text-gray-700"
+              }`}>
+                <span className={`w-2 h-2 rounded-full ${ragConfig.rag_enabled ? "bg-emerald-500 animate-pulse" : "bg-gray-400"}`} />
+                {ragConfig.rag_enabled ? "RAG Active" : "RAG Disabled"}
+              </span>
+            </div>
+          </div>
+
+          {/* Setting Cards Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            {/* 1. Strict CRM Grounding */}
+            <div className="bg-white border rounded-lg p-5 flex flex-col justify-between shadow-xs">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck size={18} className="text-blue-600" />
+                    <h3 className="text-sm font-semibold text-gray-900">Strict CRM Data Grounding</h3>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={ragConfig.strict_crm_grounding}
+                      onChange={(e) => setRagConfig((prev) => ({ ...prev, strict_crm_grounding: e.target.checked }))}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  When enabled, the AI answers strictly from your internal application database (leads, stages, activities, calls, customers, notes). It rejects hallucinated claims and quotes exact records.
+                </p>
+              </div>
+              <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-[11px] text-gray-500">
+                <span>Data Scope: Internal CRM records</span>
+                <span className="font-medium text-emerald-600">{ragConfig.strict_crm_grounding ? "Enforced" : "Permissive"}</span>
+              </div>
+            </div>
+
+            {/* 2. Hot Lead Identification */}
+            <div className="bg-white border rounded-lg p-5 flex flex-col justify-between shadow-xs">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <Flame size={18} className="text-orange-500" />
+                    <h3 className="text-sm font-semibold text-gray-900">AI Hot Lead Identification</h3>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={ragConfig.enable_hot_lead_rag}
+                      onChange={(e) => setRagConfig((prev) => ({ ...prev, enable_hot_lead_rag: e.target.checked }))}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  Powers the Copilot search prompt <i>"AI should identify hot lead"</i>. Evaluates estimated deal value, call sentiment, stage velocity, and engagement recency.
+                </p>
+              </div>
+              <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-[11px] text-gray-500">
+                <span>Threshold: &ge; {ragConfig.hot_lead_threshold || 80} Score</span>
+                <span className="font-medium text-blue-600">{ragConfig.enable_hot_lead_rag ? "Enabled" : "Disabled"}</span>
+              </div>
+            </div>
+
+            {/* 3. Next Best Engagement & Timing */}
+            <div className="bg-white border rounded-lg p-5 flex flex-col justify-between shadow-xs">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <CalendarClock size={18} className="text-indigo-600" />
+                    <h3 className="text-sm font-semibold text-gray-900">Next Best Engagement & When</h3>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={ragConfig.enable_next_engagement}
+                      onChange={(e) => setRagConfig((prev) => ({ ...prev, enable_next_engagement: e.target.checked }))}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  Powers the Copilot search prompt <i>"AI should tell what should be next engagement to do and when"</i>. Formulates the exact next interaction (Demo, Executive Call, Pricing Review) and optimal time slot.
+                </p>
+              </div>
+              <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-[11px] text-gray-500">
+                <span>Engine: Activity velocity & stage SLA</span>
+                <span className="font-medium text-indigo-600">{ragConfig.enable_next_engagement ? "Active" : "Disabled"}</span>
+              </div>
+            </div>
+
+            {/* 4. Call Qualification Reasoning (Interested vs Not Interested) */}
+            <div className="bg-white border rounded-lg p-5 flex flex-col justify-between shadow-xs">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <PhoneCall size={18} className="text-emerald-600" />
+                    <h3 className="text-sm font-semibold text-gray-900">Qualification & Rejection Reasoning</h3>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={ragConfig.enable_qualification_reasoning}
+                      onChange={(e) => setRagConfig((prev) => ({ ...prev, enable_qualification_reasoning: e.target.checked }))}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  If AI or an agent called a lead and it is <b>Not Interested</b>, AI explains why it was lost (pricing, no budget, competitor, bad timing). If <b>Interested</b>, AI highlights the exact compelling driver.
+                </p>
+              </div>
+              <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-[11px] text-gray-500">
+                <span>Mandate: Specific justification required</span>
+                <span className="font-medium text-emerald-600">{ragConfig.enable_qualification_reasoning ? "Active" : "Disabled"}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Section: Outside Company Search & Intelligence */}
+          <div className="bg-white border rounded-lg p-5 flex flex-col gap-4 shadow-xs">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Globe size={18} className="text-blue-600" />
+                  <h3 className="text-sm font-semibold text-gray-900">External Company Intelligence & Web Search</h3>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  Enables AI to reach beyond internal CRM records to fetch real-world company overview, industry vertical, and background from external public web sources.
+                </p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={ragConfig.enable_external_search}
+                  onChange={(e) => setRagConfig((prev) => ({ ...prev, enable_external_search: e.target.checked }))}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+              </label>
+            </div>
+
+            {ragConfig.enable_external_search && (
+              <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="flex-1">
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                    External Search Knowledge Provider
+                  </label>
+                  <p className="text-xs text-gray-500">
+                    Select the search index used to fetch firmographic data when an internal lead company needs external context.
+                  </p>
+                </div>
+                <select
+                  value={ragConfig.external_search_provider || "duckduckgo"}
+                  onChange={(e) => setRagConfig((prev) => ({ ...prev, external_search_provider: e.target.value }))}
+                  className="w-full sm:w-64 h-9 px-3 text-xs bg-white border border-gray-300 rounded-lg text-gray-800 font-medium focus:outline-none focus:ring-1 focus:ring-blue-500"
+                >
+                  <option value="duckduckgo">DuckDuckGo Instant Answer API (Zero-API Key)</option>
+                  <option value="wikipedia">Wikipedia Knowledge Graph</option>
+                  <option value="custom">Custom Web Search Endpoint</option>
+                </select>
+              </div>
+            )}
+          </div>
+
+          {/* Quick Save Bar for RAG */}
+          <div className="flex items-center justify-end gap-3 pt-2">
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  setSaving(true);
+                  await aiCopilotAPI.updateRagSettings(ragConfig);
+                  toast.success("RAG and Knowledge Base settings saved!");
+                } catch (e) {
+                  toast.error("Failed to save RAG settings");
+                } finally {
+                  setSaving(false);
+                }
+              }}
+              disabled={saving}
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition shadow-sm disabled:opacity-50"
+            >
+              <Save size={16} />
+              Save RAG Settings
+            </button>
           </div>
         </div>
       )}
