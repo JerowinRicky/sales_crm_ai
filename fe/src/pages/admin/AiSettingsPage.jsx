@@ -7,7 +7,7 @@ import {
   Send,
   UserCheck,
   PhoneCall,
-  SearchCheck,
+  Search,
   Cpu,
   Save,
   CheckCircle2,
@@ -15,17 +15,18 @@ import {
   HelpCircle,
   Layers,
   Activity,
-  Sliders,
-  BellRing,
-  Phone,
   MessageSquare,
   Zap,
-  Target,
+  Phone,
   RefreshCw,
+  Clock,
+  Check,
+  Building2,
+  Users,
 } from "lucide-react";
 
 export default function AiSettingsPage() {
-  const [activeTab, setActiveTab] = useState("overview");
+  const [tab, setTab] = useState("overview");
   const [saving, setSaving] = useState(false);
 
   // Configuration State
@@ -33,7 +34,6 @@ export default function AiSettingsPage() {
     // General
     ai_enabled: true,
     model_provider: "gemini-1.5-pro",
-    auto_qualification: true,
 
     // Hot Lead Identification & Scoring
     hot_lead_threshold: 80,
@@ -60,13 +60,13 @@ export default function AiSettingsPage() {
     md_whatsapp_number: "+91 98765 43210",
     head_whatsapp_fallback: "+91 98765 00000",
     escalation_message_template:
-      "🔥 *HOT LEAD ALERT (AI Qualified)*\nLead: {{lead_name}} (Score: {{lead_score}}/100)\nCompany: {{company_name}}\nReason: {{hot_reason}}\nAssigned To: {{sales_manager}}\n⚠️ SLA Expiry: {{sla_window}} min - Please take action!",
+      "🔥 HOT LEAD ALERT (AI Qualified)\nLead: {{lead_name}} (Score: {{lead_score}}/100)\nCompany: {{company_name}}\nReason: {{hot_reason}}\nAssigned To: {{sales_manager}}\n⚠️ SLA: No action taken in {{sla_window}} mins. Immediate intervention requested.",
 
     // AI Calling & Qualification
     voice_ai_enabled: true,
     calling_channel_mobile: true,
     calling_channel_whatsapp: true,
-    ai_voice_name: "Aria (Professional Sales Executive)",
+    ai_voice_name: "Aria (Professional Sales Voice)",
     max_call_retries: 3,
     auto_log_reasons: true,
     require_interest_explanation: true,
@@ -74,7 +74,7 @@ export default function AiSettingsPage() {
 
     // Best Sales Manager Assignment
     smart_assignment_enabled: true,
-    assignment_strategy: "best_performer", // best_performer, round_robin, territory_matched
+    assignment_strategy: "best_performer", // best_performer, territory_matched, round_robin
     match_domain_expertise: true,
     balance_manager_workload: true,
 
@@ -96,7 +96,7 @@ export default function AiSettingsPage() {
       ...prev,
       scoring_weights: {
         ...prev.scoring_weights,
-        [key]: parseInt(val) || 0,
+        [key]: parseInt(val, 10) || 0,
       },
     }));
   };
@@ -105,167 +105,157 @@ export default function AiSettingsPage() {
     setSaving(true);
     setTimeout(() => {
       setSaving(false);
-      toast.success("AI Configuration saved successfully!");
-    }, 600);
+      toast.success("AI configuration saved successfully");
+    }, 500);
   };
 
-  const TABS = [
-    { id: "overview", label: "Overview & Status", icon: Activity },
-    { id: "scoring", label: "Hot Lead & Scoring", icon: Flame },
-    { id: "engagement", label: "Next Engagement", icon: CalendarClock },
-    { id: "assignment", label: "Smart Routing", icon: UserCheck },
-    { id: "escalation", label: "WhatsApp & MD Alerts", icon: Send },
-    { id: "voice", label: "AI Calling & Validation", icon: PhoneCall },
-    { id: "lookalike", label: "Lookalike Audience", icon: SearchCheck },
-    { id: "engine", label: "Model & Gateway", icon: Cpu },
-  ];
-
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
-      {/* Top Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-gray-200">
+    <div className="p-6">
+      {/* Page Header */}
+      <div className="flex items-center justify-between mb-6">
         <div>
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-sm">
-              <Sparkles size={22} />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900 tracking-tight flex items-center gap-2">
-                AI Engine & Automation Settings
-                <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-700">
-                  v2.0 AI Core
-                </span>
-              </h1>
-              <p className="text-sm text-gray-500 mt-0.5">
-                Configure hot lead detection, WhatsApp MD alerts, AI voice validation, and lookalike audience pipelines.
-              </p>
-            </div>
-          </div>
+          <h1 className="text-2xl font-semibold text-gray-900">AI Settings</h1>
+          <p className="text-sm text-gray-500 mt-1">
+            Configure hot lead scoring, WhatsApp MD alerts, AI voice validation, and lookalike audience pipelines
+          </p>
         </div>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving}
+          className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition disabled:opacity-50"
+        >
+          {saving ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />}
+          Save Changes
+        </button>
+      </div>
 
-        <div className="flex items-center gap-3 w-full sm:w-auto">
+      {/* Tabs Navigation matching SettingsPage.js pill style */}
+      <div className="flex flex-wrap gap-2 mb-6 border-b border-gray-200 pb-3">
+        {[
+          ["overview", Activity, "Overview & Status"],
+          ["scoring", Flame, "Hot Lead & Scoring"],
+          ["engagement", CalendarClock, "Next Best Engagement"],
+          ["assignment", UserCheck, "Smart Assignment"],
+          ["escalation", Send, "WhatsApp & MD Alerts"],
+          ["voice", PhoneCall, "AI Voice & WhatsApp Calling"],
+          ["lookalike", Search, "Lookalike Audience"],
+          ["engine", Cpu, "Model & Gateway"],
+        ].map(([key, Icon, label]) => (
           <button
+            key={key}
             type="button"
-            onClick={handleSave}
-            disabled={saving}
-            className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium text-sm shadow-sm transition disabled:opacity-50"
+            onClick={() => setTab(key)}
+            className={`inline-flex items-center gap-2 px-5 py-2 rounded-full text-sm font-medium transition ${
+              tab === key
+                ? "bg-blue-50 text-blue-600"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
           >
-            {saving ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />}
-            Save Configuration
+            <Icon size={15} />
+            {label}
           </button>
-        </div>
+        ))}
       </div>
 
-      {/* Navigation Tabs */}
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-2 border-b border-gray-200 scrollbar-none">
-        {TABS.map((t) => {
-          const Icon = t.icon;
-          const isActive = activeTab === t.id;
-          return (
-            <button
-              key={t.id}
-              onClick={() => setActiveTab(t.id)}
-              className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium whitespace-nowrap transition-all ${
-                isActive
-                  ? "bg-blue-600 text-white shadow-sm"
-                  : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
-              }`}
-            >
-              <Icon size={16} />
-              {t.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* TAB CONTENT: Overview & Status */}
-      {activeTab === "overview" && (
-        <div className="space-y-6">
+      {/* =========================================================
+          TAB 1: OVERVIEW & STATUS
+         ========================================================= */}
+      {tab === "overview" && (
+        <div className="flex flex-col gap-5">
+          {/* Quick Metrics */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-xs">
+            <div className="bg-white border rounded-lg p-5">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">AI Engine</span>
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">AI Core</span>
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700">
+                  Active
+                </span>
               </div>
-              <div className="text-2xl font-bold text-gray-900 mt-2">Active</div>
-              <p className="text-xs text-gray-500 mt-1">Provider: Gemini 1.5 Pro</p>
+              <div className="text-2xl font-bold text-gray-900 mt-2">Gemini 1.5 Pro</div>
+              <p className="text-xs text-gray-500 mt-1">Autonomous validation active</p>
             </div>
 
-            <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-xs">
+            <div className="bg-white border rounded-lg p-5">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">Hot Lead Threshold</span>
+                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Hot Lead Trigger</span>
                 <Flame size={16} className="text-orange-500" />
               </div>
-              <div className="text-2xl font-bold text-gray-900 mt-2">{config.hot_lead_threshold} / 100</div>
-              <p className="text-xs text-gray-500 mt-1">Rank tier A leads auto-flagged</p>
+              <div className="text-2xl font-bold text-gray-900 mt-2">&ge; {config.hot_lead_threshold} pts</div>
+              <p className="text-xs text-gray-500 mt-1">Auto-promoted to Top Sales Managers</p>
             </div>
 
-            <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-xs">
+            <div className="bg-white border rounded-lg p-5">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">WhatsApp Alert Gateway</span>
+                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">WhatsApp Alerts</span>
                 <MessageSquare size={16} className="text-emerald-600" />
               </div>
               <div className="text-2xl font-bold text-emerald-600 mt-2">Connected</div>
-              <p className="text-xs text-gray-500 mt-1">MD & Head instant escalation</p>
+              <p className="text-xs text-gray-500 mt-1">Head & MD escalation armed ({config.missed_lead_sla_minutes}m SLA)</p>
             </div>
 
-            <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-xs">
+            <div className="bg-white border rounded-lg p-5">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">AI Calling Agent</span>
+                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Calling Agent</span>
                 <PhoneCall size={16} className="text-blue-600" />
               </div>
               <div className="text-2xl font-bold text-gray-900 mt-2">Ready</div>
-              <p className="text-xs text-gray-500 mt-1">Mobile & WhatsApp Voice enabled</p>
+              <p className="text-xs text-gray-500 mt-1">Mobile GSM & WhatsApp Voice</p>
             </div>
           </div>
 
           {/* Workflow Architecture Card */}
-          <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-xs">
-            <h3 className="text-base font-semibold text-gray-900 mb-3 flex items-center gap-2">
-              <Zap size={18} className="text-amber-500" />
-              Configured AI Automation Pipeline
-            </h3>
-            <p className="text-sm text-gray-600 mb-6">
-              When a lead enters via website, mobile, or WhatsApp, the autonomous sales AI executes the following sequential steps:
-            </p>
+          <div className="bg-white border rounded-lg p-5">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h2 className="text-sm font-semibold text-gray-900">
+                  Configured AI Pipeline Architecture
+                </h2>
+                <p className="text-xs text-gray-500 mt-1">
+                  How incoming leads move through autonomous validation, scoring, assignment, escalation, and lookalike generation.
+                </p>
+              </div>
+            </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-6 gap-3 pt-2">
               {[
                 {
-                  step: "01",
+                  step: "Step 1",
                   title: "Lead Ingestion",
-                  desc: "Incoming lead captured via Form, Mobile call, or WhatsApp query.",
+                  desc: "Incoming lead captured via Web Form, Phone Call, or WhatsApp.",
                 },
                 {
-                  step: "02",
+                  step: "Step 2",
                   title: "AI Voice Call",
-                  desc: "Calls customer via Mobile/WhatsApp to qualify & explain reasons.",
+                  desc: "AI dials lead via Mobile or WhatsApp Voice to qualify and record interest reasons.",
                 },
                 {
-                  step: "03",
+                  step: "Step 3",
                   title: "Lead Scoring",
-                  desc: "Calculates lead quality score (0-100) & classifies Hot vs Warm.",
+                  desc: "Calculates quality score (0-100) and flags Hot leads based on criteria.",
                 },
                 {
-                  step: "04",
-                  title: "Smart Assignment",
-                  desc: "Auto-routes Hot Lead to top-performing sales manager.",
+                  step: "Step 4",
+                  title: "Smart Routing",
+                  desc: "Auto-routes qualified Hot Leads to the best-performing Sales Manager.",
                 },
                 {
-                  step: "05",
-                  title: "WhatsApp MD Alert",
-                  desc: "Notifies Head & MD if lead is missed within SLA window.",
+                  step: "Step 5",
+                  title: "WhatsApp Alerts",
+                  desc: "Sends instant WhatsApp alerts to Territory Head and MD if lead is missed.",
                 },
                 {
-                  step: "06",
-                  title: "Lookalike Discovery",
-                  desc: "Generates lookalike audience list & calls prospective clients.",
+                  step: "Step 6",
+                  title: "Lookalike Engine",
+                  desc: "Analyzes top leads, identifies lookalike clients, gets numbers & initiates calls.",
                 },
               ].map((item) => (
-                <div key={item.step} className="bg-gray-50 border border-gray-200/80 rounded-lg p-4 relative">
-                  <div className="text-xs font-bold text-blue-600 mb-1">{item.step}</div>
-                  <div className="text-sm font-semibold text-gray-900">{item.title}</div>
-                  <p className="text-xs text-gray-500 mt-1 leading-relaxed">{item.desc}</p>
+                <div key={item.step} className="p-4 bg-gray-50 border border-gray-100 rounded-lg">
+                  <div className="text-xs font-semibold text-blue-600 uppercase tracking-wider mb-1">
+                    {item.step}
+                  </div>
+                  <div className="text-sm font-medium text-gray-900 mb-1">{item.title}</div>
+                  <p className="text-xs text-gray-500 leading-relaxed">{item.desc}</p>
                 </div>
               ))}
             </div>
@@ -273,24 +263,26 @@ export default function AiSettingsPage() {
         </div>
       )}
 
-      {/* TAB CONTENT: Hot Lead & Scoring */}
-      {activeTab === "scoring" && (
-        <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-xs space-y-6">
+      {/* =========================================================
+          TAB 2: HOT LEAD & SCORING
+         ========================================================= */}
+      {tab === "scoring" && (
+        <div className="bg-white border rounded-lg p-5 flex flex-col gap-6">
           <div>
-            <h3 className="text-lg font-semibold text-gray-900">Hot Lead Identification & Ranking</h3>
-            <p className="text-sm text-gray-500 mt-1">
+            <h2 className="text-sm font-semibold text-gray-900">Lead Scoring & Hot Lead Identification</h2>
+            <p className="text-xs text-gray-500 mt-1">
               Configure how the AI ranks lead quality, assigns a score between 0 and 100, and tags hot opportunities.
             </p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="p-4 rounded-xl border border-gray-200 bg-gray-50/50 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="p-4 bg-gray-50 border border-gray-100 rounded-lg flex flex-col gap-3">
               <div className="flex items-center justify-between">
                 <div>
-                  <h4 className="font-semibold text-gray-900 text-sm">Hot Lead Score Threshold</h4>
-                  <p className="text-xs text-gray-500">Leads with this score or higher are immediately flagged as Hot.</p>
+                  <div className="text-sm font-medium text-gray-900">Hot Lead Threshold</div>
+                  <div className="text-xs text-gray-500">Leads with this score or higher are immediately flagged as Hot.</div>
                 </div>
-                <span className="text-lg font-bold text-orange-600 bg-orange-50 px-3 py-1 rounded-md border border-orange-200">
+                <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-orange-100 text-orange-800">
                   {config.hot_lead_threshold} pts
                 </span>
               </div>
@@ -310,13 +302,13 @@ export default function AiSettingsPage() {
               </div>
             </div>
 
-            <div className="p-4 rounded-xl border border-gray-200 bg-gray-50/50 space-y-4">
+            <div className="p-4 bg-gray-50 border border-gray-100 rounded-lg flex flex-col gap-3">
               <div className="flex items-center justify-between">
                 <div>
-                  <h4 className="font-semibold text-gray-900 text-sm">Warm Lead Score Threshold</h4>
-                  <p className="text-xs text-gray-500">Leads between Warm and Hot threshold enter standard nurturing.</p>
+                  <div className="text-sm font-medium text-gray-900">Warm Lead Threshold</div>
+                  <div className="text-xs text-gray-500">Leads between Warm and Hot threshold enter standard nurturing.</div>
                 </div>
-                <span className="text-lg font-bold text-blue-600 bg-blue-50 px-3 py-1 rounded-md border border-blue-200">
+                <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-800">
                   {config.warm_lead_threshold} pts
                 </span>
               </div>
@@ -338,23 +330,25 @@ export default function AiSettingsPage() {
           </div>
 
           <div>
-            <h4 className="font-semibold text-gray-900 text-sm mb-3">AI Lead Scoring Criteria Weights (%)</h4>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+            <h3 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">
+              Scoring Weights Breakdown (%)
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
               {[
-                { key: "budget_match", label: "Budget & Revenue Match", desc: "Commercial fit with product pricing" },
+                { key: "budget_match", label: "Budget & Commercial Fit", desc: "Alignment with product pricing" },
                 { key: "decision_maker_role", label: "Decision Maker Authority", desc: "C-Level, VP, or Director involvement" },
-                { key: "timeline_urgency", label: "Timeline & Buying Urgency", desc: "Intent to purchase within 30-90 days" },
-                { key: "engagement_velocity", label: "Engagement Responsiveness", desc: "Speed of response to calls / WhatsApp" },
-                { key: "industry_fit", label: "Industry & Geography Fit", desc: "Ideal customer profile alignment" },
+                { key: "timeline_urgency", label: "Timeline & Buying Urgency", desc: "Purchase within 30-90 days" },
+                { key: "engagement_velocity", label: "Engagement Velocity", desc: "Speed of response to calls / WhatsApp" },
+                { key: "industry_fit", label: "Industry & Region Fit", desc: "Ideal customer profile alignment" },
               ].map((c) => (
-                <div key={c.key} className="border border-gray-200 rounded-lg p-3.5 bg-white">
+                <div key={c.key} className="p-3.5 bg-gray-50 border border-gray-100 rounded-lg">
                   <div className="flex justify-between items-center mb-1">
-                    <span className="text-sm font-medium text-gray-800">{c.label}</span>
-                    <span className="text-xs font-bold text-gray-700 bg-gray-100 px-2 py-0.5 rounded">
+                    <span className="text-xs font-medium text-gray-900">{c.label}</span>
+                    <span className="text-xs font-bold text-gray-700 bg-white px-2 py-0.5 border rounded">
                       {config.scoring_weights[c.key]}%
                     </span>
                   </div>
-                  <p className="text-xs text-gray-400 mb-2">{c.desc}</p>
+                  <p className="text-[11px] text-gray-500 mb-2">{c.desc}</p>
                   <input
                     type="range"
                     min="5"
@@ -371,23 +365,25 @@ export default function AiSettingsPage() {
         </div>
       )}
 
-      {/* TAB CONTENT: Next Best Engagement */}
-      {activeTab === "engagement" && (
-        <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-xs space-y-6">
+      {/* =========================================================
+          TAB 3: NEXT BEST ENGAGEMENT
+         ========================================================= */}
+      {tab === "engagement" && (
+        <div className="bg-white border rounded-lg p-5 flex flex-col gap-5">
           <div>
-            <h3 className="text-lg font-semibold text-gray-900">AI Next Best Action & Timing Engine</h3>
-            <p className="text-sm text-gray-500 mt-1">
-              AI calculates what specific action sales reps should take next and the exact optimal time to reach out.
+            <h2 className="text-sm font-semibold text-gray-900">Next Best Engagement & Timing</h2>
+            <p className="text-xs text-gray-500 mt-1">
+              AI suggests the most impactful action to take next and the exact optimal time to reach the prospect.
             </p>
           </div>
 
-          <div className="space-y-4">
-            <label className="flex items-center justify-between p-4 border border-gray-200 rounded-xl hover:bg-gray-50 cursor-pointer">
-              <div className="space-y-0.5">
-                <span className="text-sm font-medium text-gray-900">Suggest Next Action on Lead Detail</span>
-                <p className="text-xs text-gray-500">
-                  Displays an AI recommendation badge (e.g., "Send revised pricing proposal via WhatsApp tomorrow at 11:30 AM").
-                </p>
+          <div className="flex flex-col gap-3">
+            <label className="flex items-center justify-between p-4 bg-gray-50 border border-gray-100 rounded-lg cursor-pointer">
+              <div>
+                <div className="text-sm font-medium text-gray-900">Show AI Recommendation on Lead Details</div>
+                <div className="text-xs text-gray-500">
+                  Recommends exact channel, message intent, and time (e.g., "WhatsApp follow-up tomorrow at 11:30 AM").
+                </div>
               </div>
               <input
                 type="checkbox"
@@ -397,124 +393,144 @@ export default function AiSettingsPage() {
               />
             </label>
 
-            <div className="p-4 border border-gray-200 rounded-xl bg-gray-50/50 space-y-3">
-              <h4 className="text-sm font-semibold text-gray-900">Recommended Follow-up Window for Hot Leads</h4>
-              <p className="text-xs text-gray-500">
-                Maximum time allowed before AI flags the lead as "At Risk of Going Cold".
-              </p>
-              <div className="flex items-center gap-3">
+            <div className="p-4 bg-gray-50 border border-gray-100 rounded-lg flex items-center justify-between">
+              <div>
+                <div className="text-sm font-medium text-gray-900">Follow-up Window for Hot Leads</div>
+                <div className="text-xs text-gray-500">
+                  Maximum hours allowed before AI warns that the lead is turning cold.
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
                 <input
                   type="number"
                   min="1"
                   max="48"
                   value={config.action_timing_window_hours}
                   onChange={(e) => setConfig({ ...config, action_timing_window_hours: Number(e.target.value) })}
-                  className="w-24 px-3 py-1.5 border border-gray-300 rounded-lg text-sm bg-white"
+                  className="w-20 h-9 px-3 text-xs bg-white border border-gray-200 rounded-lg text-center font-medium"
                 />
-                <span className="text-sm text-gray-600 font-medium">Hours</span>
+                <span className="text-xs text-gray-600 font-medium">Hours</span>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* TAB CONTENT: Smart Routing */}
-      {activeTab === "assignment" && (
-        <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-xs space-y-6">
+      {/* =========================================================
+          TAB 4: SMART ASSIGNMENT
+         ========================================================= */}
+      {tab === "assignment" && (
+        <div className="bg-white border rounded-lg p-5 flex flex-col gap-5">
           <div>
-            <h3 className="text-lg font-semibold text-gray-900">Smart Sales Manager Assignment</h3>
-            <p className="text-sm text-gray-500 mt-1">
-              Automatically assigns qualified Hot Leads to top-performing managers to maximize closure conversion.
+            <h2 className="text-sm font-semibold text-gray-900">Smart Sales Manager Assignment</h2>
+            <p className="text-xs text-gray-500 mt-1">
+              Auto-assign qualified Hot Leads to top-performing sales managers to maximize closure conversion.
             </p>
           </div>
 
-          <div className="space-y-4">
-            <label className="flex items-center justify-between p-4 border border-gray-200 rounded-xl hover:bg-gray-50 cursor-pointer">
-              <div className="space-y-0.5">
-                <span className="text-sm font-medium text-gray-900">Auto-Assign Hot Leads</span>
-                <p className="text-xs text-gray-500">
-                  Instantly re-assigns newly qualified hot leads to the most suitable manager.
-                </p>
+          <label className="flex items-center justify-between p-4 bg-gray-50 border border-gray-100 rounded-lg cursor-pointer">
+            <div>
+              <div className="text-sm font-medium text-gray-900">Auto-Assign Hot Leads Immediately</div>
+              <div className="text-xs text-gray-500">
+                Re-routes newly qualified hot opportunities from generic pool to the best manager.
               </div>
-              <input
-                type="checkbox"
-                checked={config.smart_assignment_enabled}
-                onChange={() => handleToggle("smart_assignment_enabled")}
-                className="w-4 h-4 text-blue-600 rounded border-gray-300"
-              />
-            </label>
+            </div>
+            <input
+              type="checkbox"
+              checked={config.smart_assignment_enabled}
+              onChange={() => handleToggle("smart_assignment_enabled")}
+              className="w-4 h-4 text-blue-600 rounded border-gray-300"
+            />
+          </label>
 
-            <div className="p-4 border border-gray-200 rounded-xl bg-gray-50/50 space-y-3">
-              <h4 className="text-sm font-semibold text-gray-900">Routing Algorithm</h4>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {[
-                  { id: "best_performer", label: "Best Win-Rate Performer", desc: "Prioritizes managers with highest conversion in this product category" },
-                  { id: "territory_matched", label: "Territory / Region Lead", desc: "Assigns to designated territory head with active capacity" },
-                  { id: "round_robin", label: "Weighted Round Robin", desc: "Even distribution among qualified senior managers" },
-                ].map((opt) => (
-                  <div
-                    key={opt.id}
-                    onClick={() => setConfig({ ...config, assignment_strategy: opt.id })}
-                    className={`p-3.5 rounded-lg border cursor-pointer transition ${
-                      config.assignment_strategy === opt.id
-                        ? "border-blue-600 bg-blue-50/50 ring-1 ring-blue-600"
-                        : "border-gray-200 bg-white hover:border-gray-300"
-                    }`}
-                  >
-                    <div className="text-sm font-medium text-gray-900">{opt.label}</div>
-                    <p className="text-xs text-gray-500 mt-1">{opt.desc}</p>
-                  </div>
-                ))}
-              </div>
+          <div>
+            <h3 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">
+              Assignment Strategy
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {[
+                {
+                  id: "best_performer",
+                  title: "Best Win-Rate Performer",
+                  desc: "Prioritizes sales managers with highest conversion record in this specific product category.",
+                },
+                {
+                  id: "territory_matched",
+                  title: "Territory / Region Lead",
+                  desc: "Assigns to the designated territory head with active capacity.",
+                },
+                {
+                  id: "round_robin",
+                  title: "Weighted Round Robin",
+                  desc: "Distributes hot leads evenly across qualified senior sales managers.",
+                },
+              ].map((opt) => (
+                <div
+                  key={opt.id}
+                  onClick={() => setConfig({ ...config, assignment_strategy: opt.id })}
+                  className={`p-4 rounded-lg border cursor-pointer transition ${
+                    config.assignment_strategy === opt.id
+                      ? "border-blue-600 bg-blue-50/40"
+                      : "border-gray-200 bg-white hover:border-gray-300"
+                  }`}
+                >
+                  <div className="text-sm font-medium text-gray-900">{opt.title}</div>
+                  <p className="text-xs text-gray-500 mt-1 leading-relaxed">{opt.desc}</p>
+                </div>
+              ))}
             </div>
           </div>
         </div>
       )}
 
-      {/* TAB CONTENT: WhatsApp & MD Alerts */}
-      {activeTab === "escalation" && (
-        <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-xs space-y-6">
+      {/* =========================================================
+          TAB 5: WHATSAPP & MD ALERTS
+         ========================================================= */}
+      {tab === "escalation" && (
+        <div className="bg-white border rounded-lg p-5 flex flex-col gap-6">
           <div>
-            <h3 className="text-lg font-semibold text-gray-900">Head & MD WhatsApp Alerts (Missed Leads Safeguard)</h3>
-            <p className="text-sm text-gray-500 mt-1">
-              Ensures high-value hot leads are never missed by sending direct WhatsApp escalations to Territory Heads and Managing Director.
+            <h2 className="text-sm font-semibold text-gray-900">Head & MD WhatsApp Alerts (Missed Leads Safeguard)</h2>
+            <p className="text-xs text-gray-500 mt-1">
+              Notifies Territory Head and MD if a hot lead is not acted upon within SLA time, preventing lost deals.
             </p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-4">
-              <div className="p-4 border border-gray-200 rounded-xl bg-gray-50/50 space-y-3">
-                <h4 className="text-sm font-semibold text-gray-900">Escalation Contacts</h4>
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">MD WhatsApp Number</label>
-                    <input
-                      type="text"
-                      value={config.md_whatsapp_number}
-                      onChange={(e) => setConfig({ ...config, md_whatsapp_number: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
-                      placeholder="+91 98765 43210"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">Territory Head WhatsApp Fallback</label>
-                    <input
-                      type="text"
-                      value={config.head_whatsapp_fallback}
-                      onChange={(e) => setConfig({ ...config, head_whatsapp_fallback: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
-                      placeholder="+91 98765 00000"
-                    />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div className="flex flex-col gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1.5">
+                  Managing Director (MD) WhatsApp Number
+                </label>
+                <input
+                  type="text"
+                  value={config.md_whatsapp_number}
+                  onChange={(e) => setConfig({ ...config, md_whatsapp_number: e.target.value })}
+                  placeholder="+91 98765 43210"
+                  className="w-full h-9 px-3 text-xs bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1.5">
+                  Territory Head WhatsApp Fallback Number
+                </label>
+                <input
+                  type="text"
+                  value={config.head_whatsapp_fallback}
+                  onChange={(e) => setConfig({ ...config, head_whatsapp_fallback: e.target.value })}
+                  placeholder="+91 98765 00000"
+                  className="w-full h-9 px-3 text-xs bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+
+              <div className="p-4 bg-gray-50 border border-gray-100 rounded-lg flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-medium text-gray-900">Missed Lead SLA Window</div>
+                  <div className="text-xs text-gray-500">
+                    If sales manager doesn't contact lead within this window, trigger WhatsApp escalation.
                   </div>
                 </div>
-              </div>
-
-              <div className="p-4 border border-gray-200 rounded-xl bg-gray-50/50 space-y-3">
-                <h4 className="text-sm font-semibold text-gray-900">Missed Lead Inactivity SLA</h4>
-                <p className="text-xs text-gray-500">
-                  If the assigned sales manager does not call or engage within this window, trigger WhatsApp escalation:
-                </p>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
                   <input
                     type="number"
                     min="5"
@@ -522,44 +538,48 @@ export default function AiSettingsPage() {
                     step="5"
                     value={config.missed_lead_sla_minutes}
                     onChange={(e) => setConfig({ ...config, missed_lead_sla_minutes: Number(e.target.value) })}
-                    className="w-24 px-3 py-1.5 border border-gray-300 rounded-lg text-sm bg-white"
+                    className="w-20 h-9 px-3 text-xs bg-white border border-gray-200 rounded-lg text-center font-medium"
                   />
-                  <span className="text-sm text-gray-600 font-medium">Minutes</span>
+                  <span className="text-xs text-gray-600 font-medium">Mins</span>
                 </div>
               </div>
             </div>
 
-            <div className="space-y-4">
-              <div className="p-4 border border-gray-200 rounded-xl bg-gray-50/50 space-y-2">
-                <h4 className="text-sm font-semibold text-gray-900">WhatsApp Notification Template</h4>
-                <textarea
-                  rows={6}
-                  value={config.escalation_message_template}
-                  onChange={(e) => setConfig({ ...config, escalation_message_template: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-xs font-mono bg-white leading-relaxed"
-                />
-                <p className="text-xs text-gray-400">Available tags: {'{{lead_name}}, {{lead_score}}, {{company_name}}, {{hot_reason}}, {{sales_manager}}, {{sla_window}}'}</p>
-              </div>
+            <div className="flex flex-col gap-2">
+              <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-0.5">
+                WhatsApp Escalation Message Template
+              </label>
+              <textarea
+                rows={6}
+                value={config.escalation_message_template}
+                onChange={(e) => setConfig({ ...config, escalation_message_template: e.target.value })}
+                className="w-full p-3 text-xs font-mono bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 leading-relaxed"
+              />
+              <p className="text-[11px] text-gray-400">
+                Variables: {'{{lead_name}}, {{lead_score}}, {{company_name}}, {{hot_reason}}, {{sales_manager}}, {{sla_window}}'}
+              </p>
             </div>
           </div>
         </div>
       )}
 
-      {/* TAB CONTENT: AI Calling & Validation */}
-      {activeTab === "voice" && (
-        <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-xs space-y-6">
+      {/* =========================================================
+          TAB 6: AI CALLING & VALIDATION
+         ========================================================= */}
+      {tab === "voice" && (
+        <div className="bg-white border rounded-lg p-5 flex flex-col gap-6">
           <div>
-            <h3 className="text-lg font-semibold text-gray-900">AI Calling & Lead Validation (Mobile & WhatsApp Voice)</h3>
-            <p className="text-sm text-gray-500 mt-1">
+            <h2 className="text-sm font-semibold text-gray-900">AI Calling & Lead Validation (Mobile & WhatsApp Voice)</h2>
+            <p className="text-xs text-gray-500 mt-1">
               AI voice agent validates incoming leads via phone call or WhatsApp audio call, captures interest, and records reasoning.
             </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <label className="flex items-center justify-between p-4 border border-gray-200 rounded-xl hover:bg-gray-50 cursor-pointer">
-              <div className="space-y-0.5">
-                <span className="text-sm font-medium text-gray-900">Mobile GSM Calling Agent</span>
-                <p className="text-xs text-gray-500">Autonomous outbound calling to mobile numbers on lead capture.</p>
+            <label className="flex items-center justify-between p-4 bg-gray-50 border border-gray-100 rounded-lg cursor-pointer">
+              <div>
+                <div className="text-sm font-medium text-gray-900">Mobile GSM Calling Agent</div>
+                <div className="text-xs text-gray-500">Autonomous outbound calling to mobile numbers on lead capture.</div>
               </div>
               <input
                 type="checkbox"
@@ -569,10 +589,10 @@ export default function AiSettingsPage() {
               />
             </label>
 
-            <label className="flex items-center justify-between p-4 border border-gray-200 rounded-xl hover:bg-gray-50 cursor-pointer">
-              <div className="space-y-0.5">
-                <span className="text-sm font-medium text-gray-900">WhatsApp Voice Calling Agent</span>
-                <p className="text-xs text-gray-500">Direct WhatsApp voice call for leads received via WhatsApp chat.</p>
+            <label className="flex items-center justify-between p-4 bg-gray-50 border border-gray-100 rounded-lg cursor-pointer">
+              <div>
+                <div className="text-sm font-medium text-gray-900">WhatsApp Voice Calling Agent</div>
+                <div className="text-xs text-gray-500">Direct WhatsApp voice call for leads received via WhatsApp chat.</div>
               </div>
               <input
                 type="checkbox"
@@ -583,24 +603,26 @@ export default function AiSettingsPage() {
             </label>
           </div>
 
-          <div className="p-4 border border-gray-200 rounded-xl bg-gray-50/50 space-y-4">
-            <h4 className="text-sm font-semibold text-gray-900">Interest / Disinterest Analysis & Reasoning Log</h4>
+          <div>
+            <h3 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">
+              Qualification Reasoning & Logging
+            </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="bg-white border border-emerald-200 rounded-lg p-4 space-y-2">
-                <div className="flex items-center gap-2 text-emerald-700 font-semibold text-sm">
-                  <CheckCircle2 size={16} /> Interested Lead Qualification
+              <div className="p-4 bg-gray-50 border border-gray-100 rounded-lg flex flex-col gap-1.5">
+                <div className="flex items-center gap-2 text-emerald-700 font-semibold text-xs uppercase tracking-wide">
+                  <CheckCircle2 size={15} /> Interested Lead Qualification
                 </div>
-                <p className="text-xs text-gray-600">
-                  AI logs exact justification: Key pain points, confirmed budget, immediate project requirements, and handed off to sales rep.
+                <p className="text-xs text-gray-600 leading-relaxed">
+                  AI logs exact justification: Key pain points, confirmed budget, immediate project requirements, and automatically hands off to sales rep.
                 </p>
               </div>
 
-              <div className="bg-white border border-rose-200 rounded-lg p-4 space-y-2">
-                <div className="flex items-center gap-2 text-rose-700 font-semibold text-sm">
-                  <AlertCircle size={16} /> Not Interested / Disqualified Reason
+              <div className="p-4 bg-gray-50 border border-gray-100 rounded-lg flex flex-col gap-1.5">
+                <div className="flex items-center gap-2 text-rose-700 font-semibold text-xs uppercase tracking-wide">
+                  <AlertCircle size={15} /> Not Interested / Disqualified Reason
                 </div>
-                <p className="text-xs text-gray-600">
-                  AI logs exact root cause: e.g. "Competitor locked in for 2 years", "Zero budget allocation", or "Wrong contact person".
+                <p className="text-xs text-gray-600 leading-relaxed">
+                  AI logs exact root cause: e.g., "Competitor contract locked for 2 years", "Zero budget allocation", or "Wrong contact person".
                 </p>
               </div>
             </div>
@@ -608,23 +630,25 @@ export default function AiSettingsPage() {
         </div>
       )}
 
-      {/* TAB CONTENT: Lookalike Audience */}
-      {activeTab === "lookalike" && (
-        <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-xs space-y-6">
+      {/* =========================================================
+          TAB 7: LOOKALIKE AUDIENCE
+         ========================================================= */}
+      {tab === "lookalike" && (
+        <div className="bg-white border rounded-lg p-5 flex flex-col gap-5">
           <div>
-            <h3 className="text-lg font-semibold text-gray-900">Lookalike Audience Discovery & Prospecting</h3>
-            <p className="text-sm text-gray-500 mt-1">
+            <h2 className="text-sm font-semibold text-gray-900">Lookalike Audience Discovery & Outbound Prospecting</h2>
+            <p className="text-xs text-gray-500 mt-1">
               AI analyzes top-converting deals, identifies common client patterns, and discovers lookalike companies with contact numbers.
             </p>
           </div>
 
-          <div className="space-y-4">
-            <label className="flex items-center justify-between p-4 border border-gray-200 rounded-xl hover:bg-gray-50 cursor-pointer">
-              <div className="space-y-0.5">
-                <span className="text-sm font-medium text-gray-900">Automatic Lookalike Prospecting</span>
-                <p className="text-xs text-gray-500">
-                  Analyzes leads with score &ge; {config.lookalike_min_score} and extracts industry, company scale, and location profiles.
-                </p>
+          <div className="flex flex-col gap-3">
+            <label className="flex items-center justify-between p-4 bg-gray-50 border border-gray-100 rounded-lg cursor-pointer">
+              <div>
+                <div className="text-sm font-medium text-gray-900">Automatic Lookalike Prospecting</div>
+                <div className="text-xs text-gray-500">
+                  Analyzes leads with score &ge; {config.lookalike_min_score} and matches industry, company scale, and location profiles.
+                </div>
               </div>
               <input
                 type="checkbox"
@@ -634,12 +658,12 @@ export default function AiSettingsPage() {
               />
             </label>
 
-            <label className="flex items-center justify-between p-4 border border-gray-200 rounded-xl hover:bg-gray-50 cursor-pointer">
-              <div className="space-y-0.5">
-                <span className="text-sm font-medium text-gray-900">Enrich Verified Contact Numbers</span>
-                <p className="text-xs text-gray-500">
-                  Queries business registries and data partners to fetch verified phone numbers for lookalike targets.
-                </p>
+            <label className="flex items-center justify-between p-4 bg-gray-50 border border-gray-100 rounded-lg cursor-pointer">
+              <div>
+                <div className="text-sm font-medium text-gray-900">Enrich Verified Contact Numbers</div>
+                <div className="text-xs text-gray-500">
+                  Auto-fetches verified corporate contact numbers for discovered lookalike targets.
+                </div>
               </div>
               <input
                 type="checkbox"
@@ -649,12 +673,12 @@ export default function AiSettingsPage() {
               />
             </label>
 
-            <label className="flex items-center justify-between p-4 border border-gray-200 rounded-xl hover:bg-gray-50 cursor-pointer">
-              <div className="space-y-0.5">
-                <span className="text-sm font-medium text-gray-900">Automated AI Calling to Qualified Lookalikes</span>
-                <p className="text-xs text-gray-500">
-                  AI dials verified lookalike leads, runs validation pitch, and passes interested leads to respective sales managers.
-                </p>
+            <label className="flex items-center justify-between p-4 bg-gray-50 border border-gray-100 rounded-lg cursor-pointer">
+              <div>
+                <div className="text-sm font-medium text-gray-900">Automated AI Outbound Calls to Lookalikes</div>
+                <div className="text-xs text-gray-500">
+                  AI dials verified lookalikes, runs pitch validation, and routes interested leads to sales managers.
+                </div>
               </div>
               <input
                 type="checkbox"
@@ -667,50 +691,58 @@ export default function AiSettingsPage() {
         </div>
       )}
 
-      {/* TAB CONTENT: Model & Gateway */}
-      {activeTab === "engine" && (
-        <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-xs space-y-6">
+      {/* =========================================================
+          TAB 8: MODEL & GATEWAY
+         ========================================================= */}
+      {tab === "engine" && (
+        <div className="bg-white border rounded-lg p-5 flex flex-col gap-6">
           <div>
-            <h3 className="text-lg font-semibold text-gray-900">AI Model & Integration Gateways</h3>
-            <p className="text-sm text-gray-500 mt-1">
+            <h2 className="text-sm font-semibold text-gray-900">AI Model & Integration Gateways</h2>
+            <p className="text-xs text-gray-500 mt-1">
               Select language models, WhatsApp Business API endpoints, and Telephony integrations.
             </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="p-4 border border-gray-200 rounded-xl space-y-3">
-              <h4 className="text-sm font-semibold text-gray-900">LLM Engine</h4>
+            <div className="p-4 bg-gray-50 border border-gray-100 rounded-lg flex flex-col gap-3">
+              <label className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                LLM Provider
+              </label>
               <select
                 value={config.model_provider}
                 onChange={(e) => setConfig({ ...config, model_provider: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+                className="w-full h-9 px-3 text-xs bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
               >
                 <option value="gemini-1.5-pro">Google Gemini 1.5 Pro</option>
                 <option value="gemini-1.5-flash">Google Gemini 1.5 Flash</option>
                 <option value="gpt-4o">OpenAI GPT-4o</option>
                 <option value="claude-3-5-sonnet">Claude 3.5 Sonnet</option>
               </select>
-              <p className="text-xs text-gray-400">Used for scoring, validation reasoning, and next action recommendations.</p>
+              <p className="text-[11px] text-gray-400">Used for scoring, validation reasoning, and next action advice.</p>
             </div>
 
-            <div className="p-4 border border-gray-200 rounded-xl space-y-3">
-              <h4 className="text-sm font-semibold text-gray-900">WhatsApp Gateway</h4>
-              <select className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white">
+            <div className="p-4 bg-gray-50 border border-gray-100 rounded-lg flex flex-col gap-3">
+              <label className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                WhatsApp Gateway
+              </label>
+              <select className="w-full h-9 px-3 text-xs bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500">
                 <option value="meta">Meta WhatsApp Cloud API</option>
                 <option value="gupshup">Gupshup Enterprise</option>
                 <option value="twilio">Twilio Messaging API</option>
               </select>
-              <p className="text-xs text-gray-400">Used for MD & Head escalations and incoming lead capture.</p>
+              <p className="text-[11px] text-gray-400">Used for MD & Head escalations and WhatsApp lead chats.</p>
             </div>
 
-            <div className="p-4 border border-gray-200 rounded-xl space-y-3">
-              <h4 className="text-sm font-semibold text-gray-900">Telephony Provider</h4>
-              <select className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white">
+            <div className="p-4 bg-gray-50 border border-gray-100 rounded-lg flex flex-col gap-3">
+              <label className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                Telephony Provider
+              </label>
+              <select className="w-full h-9 px-3 text-xs bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500">
                 <option value="exotel">Exotel / Twilio Voice</option>
-                <option value="bland">Bland AI Phone Engine</option>
+                <option value="bland">Bland AI Voice Engine</option>
                 <option value="vapi">Vapi Voice Pipeline</option>
               </select>
-              <p className="text-xs text-gray-400">Used for autonomous mobile & WhatsApp calling.</p>
+              <p className="text-[11px] text-gray-400">Used for autonomous mobile & WhatsApp calling.</p>
             </div>
           </div>
         </div>
@@ -718,4 +750,3 @@ export default function AiSettingsPage() {
     </div>
   );
 }
-

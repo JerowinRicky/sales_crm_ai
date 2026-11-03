@@ -165,7 +165,7 @@ function AppRoutes() {
           <Route
             path="admin/ai-settings"
             element={
-              <Guard manager>
+              <Guard admin>
                 <AiSettingsPage />
               </Guard>
             }

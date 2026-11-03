@@ -26,7 +26,7 @@ const NAV = [
   { path: '/admin/users', icon: Users, label: 'User Management', admin: true },
   { path: '/admin/mail', icon: Mail, label: 'Mail Center', admin: true },
   { path: '/admin/settings', icon: Settings, label: 'Settings', admin: true },
-  { path: '/admin/ai-settings', icon: Sparkles, label: 'AI Settings', manager: true },
+  { path: '/admin/ai-settings', icon: Sparkles, label: 'AI Settings', admin: true },
   { path: '/notifications', icon: Bell, label: 'Notifications', all: true, hasBadge: true },
 ];
 
