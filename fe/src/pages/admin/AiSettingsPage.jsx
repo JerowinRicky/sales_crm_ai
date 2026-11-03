@@ -461,35 +461,78 @@ export default function AiSettingsPage() {
         </div>
       </div>
 
-      {/* Tabs Navigation matching SettingsPage.js pill style */}
-      <div className="flex flex-wrap gap-2 mb-6 border-b border-gray-200 pb-3">
-        {[
-          ["engine", Cpu, "Model & Gateway"],
-          ["analytics", BarChart3, "Token Analytics & Quotas"],
-          ["rag", Layers, "RAG & Company Intelligence"],
-          ["overview", Activity, "Overview & Status"],
-          ["scoring", Flame, "Hot Lead & Scoring"],
-          ["engagement", CalendarClock, "Next Best Engagement"],
-          ["assignment", UserCheck, "Smart Assignment"],
-          ["escalation", Send, "WhatsApp & MD Alerts"],
-          ["voice", PhoneCall, "AI Voice & WhatsApp Calling"],
-          ["lookalike", Search, "Lookalike Audience"],
-        ].map(([key, Icon, label]) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => setTab(key)}
-            className={`inline-flex items-center gap-2 px-5 py-2 rounded-full text-sm font-medium transition ${
-              tab === key
-                ? "bg-blue-50 text-blue-600"
-                : "text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            <Icon size={15} />
-            {label}
-          </button>
-        ))}
-      </div>
+      {/* 2-Column Responsive Layout: Left Sidebar Navigation + Right Content Area */}
+      <div className="flex flex-col md:flex-row items-start gap-6">
+        {/* Left Sidebar Navigation */}
+        <aside className="w-full md:w-64 shrink-0 bg-white border border-gray-200 rounded-xl p-2.5 shadow-2xs space-y-1 self-start sticky top-4">
+          <div className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-gray-400">
+            AI Settings
+          </div>
+
+          {[
+            {
+              key: "engine",
+              icon: Cpu,
+              label: "Model & Gateway",
+              desc: "LLM, WhatsApp & Telephony",
+            },
+            {
+              key: "analytics",
+              icon: BarChart3,
+              label: "Token Analytics & Quotas",
+              desc: "Tokens used, limits & restrictions",
+            },
+            {
+              key: "rag",
+              icon: Layers,
+              label: "RAG & CRM Grounding",
+              desc: "Pipeline scope & web search",
+            },
+          ].map(({ key, icon: Icon, label, desc }) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setTab(key)}
+              className={`w-full flex items-start gap-3 px-3 py-2.5 rounded-lg text-left transition cursor-pointer group ${
+                tab === key
+                  ? "bg-blue-50 text-blue-700 border border-blue-200 shadow-2xs"
+                  : "text-gray-700 hover:bg-gray-50 hover:text-gray-900 border border-transparent"
+              }`}
+            >
+              <div
+                className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition ${
+                  tab === key
+                    ? "bg-blue-600 text-white shadow-xs"
+                    : "bg-gray-100 text-gray-500 group-hover:bg-gray-200 group-hover:text-gray-700"
+                }`}
+              >
+                <Icon size={16} />
+              </div>
+              <div className="overflow-hidden">
+                <div className={`text-xs font-bold leading-tight ${tab === key ? "text-blue-900" : "text-gray-800"}`}>
+                  {label}
+                </div>
+                <div className={`text-[10px] truncate mt-0.5 ${tab === key ? "text-blue-600" : "text-gray-400"}`}>
+                  {desc}
+                </div>
+              </div>
+            </button>
+          ))}
+
+          {/* Status badge at bottom of sidebar */}
+          <div className="pt-3 border-t border-gray-100 px-3 py-2 mt-3">
+            <div className="text-[11px] font-semibold text-gray-700 flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span>olgpt ai Active</span>
+            </div>
+            <p className="text-[10px] text-gray-400 mt-0.5 leading-normal">
+              Domain-scoped RBAC and token usage monitoring enabled.
+            </p>
+          </div>
+        </aside>
+
+        {/* Right Content Area */}
+        <main className="flex-1 w-full min-w-0">
 
       {/* =========================================================
           TAB: MODEL & GATEWAY (HIGHLY CUSTOMIZABLE + HISTORY)
@@ -1391,171 +1434,8 @@ export default function AiSettingsPage() {
           </div>
         </div>
       )}
-
-      {/* =========================================================
-          TAB: OVERVIEW & ARCHITECTURE
-         ========================================================= */}
-      {tab === "overview" && (
-        <div className="flex flex-col gap-5">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="bg-white border rounded-lg p-5">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">AI Core</span>
-                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700">
-                  v{gatewayConfig.current_version || 1}
-                </span>
-              </div>
-              <div className="text-xl font-bold text-gray-900 mt-2">{gatewayConfig.llm_model}</div>
-              <p className="text-xs text-gray-500 mt-1">Provider: {gatewayConfig.llm_provider}</p>
-            </div>
-
-            <div className="bg-white border rounded-lg p-5">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Hot Lead Trigger</span>
-                <Flame size={16} className="text-orange-500" />
-              </div>
-              <div className="text-2xl font-bold text-gray-900 mt-2">&ge; 80 pts</div>
-              <p className="text-xs text-gray-500 mt-1">Auto-promoted to Top Sales Managers</p>
-            </div>
-
-            <div className="bg-white border rounded-lg p-5">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">WhatsApp Alerts</span>
-                <MessageSquare size={16} className="text-emerald-600" />
-              </div>
-              <div className="text-xl font-bold text-emerald-600 mt-2 capitalize">{gatewayConfig.whatsapp_provider}</div>
-              <p className="text-xs text-gray-500 mt-1">Head & MD escalation armed (30m SLA)</p>
-            </div>
-
-            <div className="bg-white border rounded-lg p-5">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Calling Agent</span>
-                <PhoneCall size={16} className="text-blue-600" />
-              </div>
-              <div className="text-xl font-bold text-gray-900 mt-2 capitalize">{gatewayConfig.telephony_provider}</div>
-              <p className="text-xs text-gray-500 mt-1">Caller: {gatewayConfig.telephony_caller_id || "Active"}</p>
-            </div>
-          </div>
-
-          <div className="bg-white border rounded-lg p-5">
-            <h2 className="text-sm font-semibold text-gray-900 mb-1">
-              Configured AI Pipeline Architecture
-            </h2>
-            <p className="text-xs text-gray-500 mb-4">
-              Autonomous execution flow from lead ingestion to qualification and lookalike prospecting.
-            </p>
-
-            <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
-              {[
-                { step: "01", title: "Lead Ingestion", desc: "Incoming lead captured via Web Form, Mobile call, or WhatsApp." },
-                { step: "02", title: "AI Voice Call", desc: "AI dials lead via Mobile or WhatsApp Voice to qualify and record interest." },
-                { step: "03", title: "Lead Scoring", desc: "Calculates quality score (0-100) and flags Hot leads based on criteria." },
-                { step: "04", title: "Smart Routing", desc: "Auto-routes qualified Hot Leads to the best-performing Sales Manager." },
-                { step: "05", title: "WhatsApp Alerts", desc: "Sends instant WhatsApp alerts to Territory Head and MD if lead is missed." },
-                { step: "06", title: "Lookalike Engine", desc: "Discovers lookalike clients, enriches numbers & runs outbound qualification." },
-              ].map((item) => (
-                <div key={item.step} className="p-4 bg-gray-50 border border-gray-100 rounded-lg">
-                  <div className="text-xs font-semibold text-blue-600 uppercase tracking-wider mb-1">{item.step}</div>
-                  <div className="text-sm font-medium text-gray-900 mb-1">{item.title}</div>
-                  <p className="text-xs text-gray-500 leading-relaxed">{item.desc}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* =========================================================
-          TAB: HOT LEAD & SCORING
-         ========================================================= */}
-      {tab === "scoring" && (
-        <div className="bg-white border rounded-lg p-5 flex flex-col gap-6">
-          <div>
-            <h2 className="text-sm font-semibold text-gray-900">Lead Scoring & Hot Lead Identification</h2>
-            <p className="text-xs text-gray-500 mt-1">
-              Configure how the AI ranks lead quality, assigns score between 0 and 100, and tags hot opportunities.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="p-4 bg-gray-50 border border-gray-100 rounded-lg flex flex-col gap-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-sm font-medium text-gray-900">Hot Lead Threshold</div>
-                  <div className="text-xs text-gray-500">Leads with this score or higher are immediately flagged as Hot.</div>
-                </div>
-                <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-orange-100 text-orange-800">
-                  80 pts
-                </span>
-              </div>
-              <input type="range" min="50" max="95" step="5" defaultValue="80" className="w-full accent-blue-600 cursor-pointer" />
-            </div>
-
-            <div className="p-4 bg-gray-50 border border-gray-100 rounded-lg flex flex-col gap-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-sm font-medium text-gray-900">Warm Lead Threshold</div>
-                  <div className="text-xs text-gray-500">Leads between Warm and Hot threshold enter standard nurturing.</div>
-                </div>
-                <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-800">
-                  50 pts
-                </span>
-              </div>
-              <input type="range" min="30" max="70" step="5" defaultValue="50" className="w-full accent-blue-600 cursor-pointer" />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* =========================================================
-          TAB: NEXT BEST ENGAGEMENT
-         ========================================================= */}
-      {tab === "engagement" && (
-        <div className="bg-white border rounded-lg p-5 flex flex-col gap-5">
-          <h2 className="text-sm font-semibold text-gray-900">Next Best Engagement & Timing</h2>
-          <p className="text-xs text-gray-500">AI suggests the most impactful action to take next and the exact optimal time to reach the prospect.</p>
-        </div>
-      )}
-
-      {/* =========================================================
-          TAB: SMART ASSIGNMENT
-         ========================================================= */}
-      {tab === "assignment" && (
-        <div className="bg-white border rounded-lg p-5 flex flex-col gap-5">
-          <h2 className="text-sm font-semibold text-gray-900">Smart Sales Manager Assignment</h2>
-          <p className="text-xs text-gray-500">Auto-assign qualified Hot Leads to top-performing sales managers to maximize closure conversion.</p>
-        </div>
-      )}
-
-      {/* =========================================================
-          TAB: WHATSAPP & MD ALERTS
-         ========================================================= */}
-      {tab === "escalation" && (
-        <div className="bg-white border rounded-lg p-5 flex flex-col gap-6">
-          <h2 className="text-sm font-semibold text-gray-900">Head & MD WhatsApp Alerts (Missed Leads Safeguard)</h2>
-          <p className="text-xs text-gray-500">Notifies Territory Head and MD if a hot lead is not acted upon within SLA time, preventing lost deals.</p>
-        </div>
-      )}
-
-      {/* =========================================================
-          TAB: AI VOICE & WHATSAPP CALLING
-         ========================================================= */}
-      {tab === "voice" && (
-        <div className="bg-white border rounded-lg p-5 flex flex-col gap-6">
-          <h2 className="text-sm font-semibold text-gray-900">AI Calling & Lead Validation (Mobile & WhatsApp Voice)</h2>
-          <p className="text-xs text-gray-500">AI voice agent validates incoming leads via phone call or WhatsApp audio call, captures interest, and records reasoning.</p>
-        </div>
-      )}
-
-      {/* =========================================================
-          TAB: LOOKALIKE AUDIENCE
-         ========================================================= */}
-      {tab === "lookalike" && (
-        <div className="bg-white border rounded-lg p-5 flex flex-col gap-5">
-          <h2 className="text-sm font-semibold text-gray-900">Lookalike Audience Discovery & Outbound Prospecting</h2>
-          <p className="text-xs text-gray-500">AI analyzes top-converting deals, identifies common client patterns, and discovers lookalike companies with contact numbers.</p>
-        </div>
-      )}
-    </div>
+    </main>
+  </div>
+</div>
   );
 }
