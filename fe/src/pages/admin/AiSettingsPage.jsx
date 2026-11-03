@@ -371,14 +371,16 @@ export default function AiSettingsPage() {
 
       if (res?.data?.success) {
         setTestResult((prev) => ({ ...prev, [type]: { ok: true, data: res.data } }));
-        toast.success(`${type.toUpperCase()} Gateway test successful (${res.data.latency_ms}ms)`);
+        toast.success(res.data.message || `${type.toUpperCase()} connection successful!`);
       } else {
-        setTestResult((prev) => ({ ...prev, [type]: { ok: false, error: res?.data?.message || "Failed" } }));
-        toast.error(`${type.toUpperCase()} Gateway connection failed`);
+        const msg = res?.data?.message || "Please check your configuration and try again.";
+        setTestResult((prev) => ({ ...prev, [type]: { ok: false, error: msg } }));
+        toast.error(msg);
       }
     } catch (err) {
-      setTestResult((prev) => ({ ...prev, [type]: { ok: false, error: err.message } }));
-      toast.error(`Connection failed: ${err.message}`);
+      const msg = err.message || "Please check the URL and settings.";
+      setTestResult((prev) => ({ ...prev, [type]: { ok: false, error: msg } }));
+      toast.error(msg);
     } finally {
       setTesting((prev) => ({ ...prev, [type]: false }));
     }

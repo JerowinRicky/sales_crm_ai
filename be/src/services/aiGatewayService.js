@@ -351,19 +351,19 @@ class AiGatewayService {
   async testConnection({ type, config }) {
     const startTime = Date.now();
 
-    function validateUrl(rawUrl, label = 'Base URL') {
+    function validateUrl(rawUrl, label = 'URL') {
       if (!rawUrl || typeof rawUrl !== 'string' || !rawUrl.trim()) {
-        throw new Error(`${label} is required.`);
+        throw new Error(`Please check the ${label}. It cannot be empty.`);
       }
       const trimmed = rawUrl.trim();
       let parsed;
       try {
         parsed = new URL(trimmed);
-      } catch (err) {
-        throw new Error(`Invalid URL format "${trimmed}". Must be a complete URL starting with https:// or http://`);
+      } catch (_) {
+        throw new Error(`Please check the ${label}. Enter a valid address starting with https:// or http://`);
       }
       if (!['http:', 'https:'].includes(parsed.protocol)) {
-        throw new Error(`Invalid protocol "${parsed.protocol}" in URL "${trimmed}". Only https:// or http:// are permitted.`);
+        throw new Error(`Please check the ${label}. The address must start with https:// or http://`);
       }
       return parsed.toString().replace(/\/+$/, '');
     }
@@ -378,7 +378,7 @@ class AiGatewayService {
 
       // Check API Key
       if (provider !== 'ollama' && (!apiKey || apiKey.length < 5)) {
-        throw new Error(`API Key is required to test ${provider.toUpperCase()} connection. Please paste an API key.`);
+        throw new Error(`Please check the API key. An API key is required to connect to ${provider.toUpperCase()}.`);
       }
 
       let testUrl;
@@ -410,15 +410,15 @@ class AiGatewayService {
         });
       } catch (fetchErr) {
         if (fetchErr.name === 'TimeoutError' || fetchErr.name === 'AbortError') {
-          throw new Error(`Connection timed out after 12s connecting to "${cleanBaseUrl}". Verify network/firewall.`);
+          throw new Error('Connection timed out. Please check the URL and try again.');
         }
         if (fetchErr.cause?.code === 'ENOTFOUND') {
-          throw new Error(`DNS lookup failed for "${cleanBaseUrl}": Hostname does not exist.`);
+          throw new Error('Unable to reach server. Please check the URL hostname.');
         }
         if (fetchErr.cause?.code === 'ECONNREFUSED') {
-          throw new Error(`Connection refused at "${cleanBaseUrl}": Service is not listening on this port.`);
+          throw new Error('Connection refused. Please check the URL port and server status.');
         }
-        throw new Error(`Network failure connecting to "${cleanBaseUrl}": ${fetchErr.message}`);
+        throw new Error('Unable to connect. Please check the URL and your network connection.');
       }
 
       const latencyMs = Date.now() - startTime;
@@ -439,28 +439,26 @@ class AiGatewayService {
           provider,
           model,
           latency_ms: latencyMs,
-          message: `Successfully connected to ${provider.toUpperCase()} (${model || 'default'}) gateway at ${cleanBaseUrl} (Verified HTTP 200 OK in ${latencyMs}ms).`,
+          message: `Connected successfully to ${provider.toUpperCase()} (${model || 'default'}) [${latencyMs}ms].`,
           timestamp: new Date().toISOString(),
         };
       }
 
       // Handle Authentication / Authorization Errors
       if (response.status === 401) {
-        const detail = resJson?.error?.message || resJson?.message || 'Invalid or revoked API key.';
-        throw new Error(`Authentication Failed (HTTP 401 Unauthorized) on ${provider.toUpperCase()}: ${detail}`);
+        throw new Error(`Authentication failed on ${provider.toUpperCase()}. Please check your API key.`);
       }
 
       if (response.status === 403) {
-        const detail = resJson?.error?.message || resJson?.message || 'Access forbidden. Check permissions or organization billing.';
-        throw new Error(`Access Forbidden (HTTP 403) on ${provider.toUpperCase()}: ${detail}`);
+        throw new Error(`Access forbidden on ${provider.toUpperCase()}. Please check your account permissions or billing balance.`);
       }
 
       if (response.status === 404) {
-        throw new Error(`Endpoint not found (HTTP 404) at "${testUrl}". Please verify the Base URL path.`);
+        throw new Error('Endpoint not found. Please check the Base URL path.');
       }
 
-      const errorMsg = resJson?.error?.message || resJson?.message || response.statusText || resBodyText.slice(0, 150);
-      throw new Error(`${provider.toUpperCase()} returned HTTP ${response.status}: ${errorMsg}`);
+      const errorMsg = resJson?.error?.message || resJson?.message || response.statusText;
+      throw new Error(`Server returned error (HTTP ${response.status}): ${errorMsg || 'Please check your configuration.'}`);
     }
 
     if (type === 'whatsapp') {
@@ -471,12 +469,12 @@ class AiGatewayService {
       const phoneId = (config.whatsapp_phone_number_id || '').trim();
 
       if (!apiKey || apiKey.length < 5) {
-        throw new Error(`WhatsApp API Token / Key is required. Please paste your access token.`);
+        throw new Error('Please check your WhatsApp Access Token / API Key. It is required.');
       }
 
       if (provider === 'meta') {
         if (!phoneId) {
-          throw new Error('Meta WhatsApp Phone Number ID is required to test gateway.');
+          throw new Error('Please check the Phone Number ID. It is required for Meta WhatsApp API.');
         }
 
         const testUrl = `${cleanEndpoint}/${encodeURIComponent(phoneId)}`;
@@ -491,7 +489,7 @@ class AiGatewayService {
             signal: AbortSignal.timeout(12000),
           });
         } catch (fetchErr) {
-          throw new Error(`Network failure connecting to Meta WhatsApp API at "${cleanEndpoint}": ${fetchErr.message}`);
+          throw new Error('Unable to connect to WhatsApp API. Please check the endpoint URL.');
         }
 
         const latencyMs = Date.now() - startTime;
@@ -509,13 +507,17 @@ class AiGatewayService {
             provider: 'meta',
             phone_id: phoneId,
             latency_ms: latencyMs,
-            message: `Meta WhatsApp Cloud API Verified! Phone ID: ${phoneId} ("${verifiedName}", Quality: ${quality}). Ready for MD alerts.`,
+            message: `Meta WhatsApp API verified ("${verifiedName}", Quality: ${quality}) [${latencyMs}ms].`,
             timestamp: new Date().toISOString(),
           };
         }
 
-        const detail = resJson?.error?.message || response.statusText;
-        throw new Error(`Meta WhatsApp API returned HTTP ${response.status}: ${detail}`);
+        if (response.status === 401 || response.status === 400) {
+          const detail = resJson?.error?.message || 'Invalid WhatsApp Access Token or Phone ID.';
+          throw new Error(`Authentication failed on Meta WhatsApp: ${detail}`);
+        }
+
+        throw new Error(`WhatsApp API returned HTTP ${response.status}. Please check your credentials.`);
       }
 
       // Gupshup, Twilio, Custom
@@ -530,7 +532,7 @@ class AiGatewayService {
           signal: AbortSignal.timeout(12000),
         });
       } catch (fetchErr) {
-        throw new Error(`Network error connecting to WhatsApp endpoint "${cleanEndpoint}": ${fetchErr.message}`);
+        throw new Error('Unable to connect. Please check the WhatsApp endpoint URL.');
       }
 
       const latencyMs = Date.now() - startTime;
@@ -540,12 +542,12 @@ class AiGatewayService {
           type: 'whatsapp',
           provider,
           latency_ms: latencyMs,
-          message: `Connected to ${provider.toUpperCase()} WhatsApp gateway at ${cleanEndpoint} (HTTP ${response.status} in ${latencyMs}ms).`,
+          message: `Connected to ${provider.toUpperCase()} WhatsApp gateway [${latencyMs}ms].`,
           timestamp: new Date().toISOString(),
         };
       }
 
-      throw new Error(`${provider.toUpperCase()} WhatsApp gateway returned HTTP ${response.status} ${response.statusText}`);
+      throw new Error(`WhatsApp gateway returned HTTP ${response.status}. Please check your settings.`);
     }
 
     if (type === 'telephony') {
@@ -556,10 +558,10 @@ class AiGatewayService {
       const authToken = await this.resolveSecret(config.telephony_auth_token, 'telephony_auth_token');
 
       if (!accountSid) {
-        throw new Error(`Telephony Account SID / Key is required.`);
+        throw new Error('Please check the Account SID / Key. It cannot be empty.');
       }
       if (!authToken || authToken.length < 5) {
-        throw new Error(`Telephony Auth Token / Secret is required.`);
+        throw new Error('Please check the Auth Token / Secret. It cannot be empty.');
       }
 
       let testUrl;
@@ -595,33 +597,26 @@ class AiGatewayService {
           signal: AbortSignal.timeout(12000),
         });
       } catch (fetchErr) {
-        throw new Error(`Network failure connecting to Telephony provider at "${testUrl}": ${fetchErr.message}`);
+        throw new Error('Unable to connect to Telephony provider. Please check the URL.');
       }
 
       const latencyMs = Date.now() - startTime;
-      let resJson = null;
-      try {
-        resJson = await response.json();
-      } catch (_) {}
-
       if (response.status === 200) {
         return {
           success: true,
           type: 'telephony',
           provider,
           latency_ms: latencyMs,
-          message: `Telephony & Voice agent channel verified (${provider.toUpperCase()} Account: ${accountSid}). Verified HTTP 200 OK (${latencyMs}ms).`,
+          message: `Telephony channel verified (${provider.toUpperCase()}) [${latencyMs}ms].`,
           timestamp: new Date().toISOString(),
         };
       }
 
       if (response.status === 401 || response.status === 403) {
-        const detail = resJson?.message || 'Invalid Account SID or Auth Token';
-        throw new Error(`Telephony Authentication Failed (HTTP ${response.status}): ${detail}`);
+        throw new Error('Authentication failed on Telephony provider. Please check Account SID and Auth Token.');
       }
 
-      const detail = resJson?.message || response.statusText;
-      throw new Error(`${provider.toUpperCase()} Telephony returned HTTP ${response.status}: ${detail}`);
+      throw new Error(`Telephony returned HTTP ${response.status}. Please check your credentials.`);
     }
 
     throw new Error(`Unknown gateway type: "${type}"`);
